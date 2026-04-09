@@ -110,6 +110,10 @@ except Exception:
     raise
 
 
+def should_run_smoke_test():
+    return os.environ.get("DRB_OCR_AI_SMOKE_TEST", "").strip() == "1"
+
+
 if __name__ == "__main__":
     try:
         log_info(
@@ -118,6 +122,10 @@ if __name__ == "__main__":
             base_path,
             os.getcwd(),
         )
+
+        if should_run_smoke_test():
+            log_info("Smoke test mode passed after runtime imports")
+            sys.exit(0)
 
         multiprocessing.freeze_support()
 
