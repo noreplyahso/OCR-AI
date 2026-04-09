@@ -1,0 +1,13 @@
+[flake8]
+max-line-length = 120
+exclude =
+  .git,
+  __pycache__,
+  .venv,
+  build,
+  dist,
+  module,
+  RunTime_Sofware,
+  lib/build
+per-file-ignores =
+  main.py:E402,F401,F403,F405

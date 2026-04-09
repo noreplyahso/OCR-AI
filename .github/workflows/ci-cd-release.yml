@@ -1,3 +1,25 @@
+# Required GitHub secrets:
+#   GH_RELEASE_TOKEN
+#     Personal access token with `contents:write` to create, edit, download, and promote releases.
+#   FAILURE_WEBHOOK_URL
+#     Optional Slack-compatible webhook URL used by `if: failure()` notification steps.
+#
+# Required GitHub environments:
+#   staging
+#     Used for prerelease publication.
+#   production
+#     Configure required reviewers here to create the manual approval gate before production promotion.
+# TODO: Add required reviewers to the `production` environment in GitHub settings.
+#
+# Deployment model:
+#   Rolling promotion with immutable artifacts.
+#   The workflow validates the exact build on staging first, then promotes the same ZIP and installer to production.
+#   The previous stable release remains available until the production health check succeeds.
+#
+# Manual rollback strategy:
+#   Run this workflow manually with `rollback_tag` set to a previously validated production tag such as `v1.2.2`.
+#   The workflow will re-promote that existing release as `latest` without rebuilding artifacts.
+
 name: ci-cd-release
 
 on:
@@ -7,244 +29,231 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
-      bump_level:
-        description: "Version bump level for a manual run"
+      release_version:
+        description: "Semver tag to build and deploy, for example v1.2.3"
         required: false
-        default: patch
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
-      prerelease:
-        description: "Mark the manual release as a prerelease"
+        type: string
+      rollback_tag:
+        description: "Existing stable release tag to re-promote, for example v1.2.2"
         required: false
-        default: false
-        type: boolean
-      make_latest:
-        description: "Mark the manual release as Latest"
-        required: false
-        default: true
-        type: boolean
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: DRB-OCR-AI
+  PYTHON_VERSION: "3.9"
+  PYTHONUTF8: "1"
+  PIP_EXTRA_INDEX_URL: "https://download.pytorch.org/whl/cu117"
+  FAILURE_WEBHOOK_URL: ${{ secrets.FAILURE_WEBHOOK_URL }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  ci:
-    name: CI
+  resolve-release:
+    name: Resolve Release Metadata
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    outputs:
+      deploy_mode: ${{ steps.resolve.outputs.deploy_mode }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      release_name: ${{ steps.resolve.outputs.release_name }}
+      staging_tag: ${{ steps.resolve.outputs.staging_tag }}
+      app_version: ${{ steps.resolve.outputs.app_version }}
+
+    steps:
+      - name: Resolve release mode and tags
+        id: resolve
+        shell: pwsh
+        continue-on-error: false
+        run: |
+          $eventName = '${{ github.event_name }}'
+          $releaseVersion = '${{ github.event.inputs.release_version }}'
+          $rollbackTag = '${{ github.event.inputs.rollback_tag }}'
+
+          if ($eventName -eq 'push' -and '${{ github.ref_type }}' -eq 'tag') {
+            $deployMode = 'release'
+            $releaseTag = '${{ github.ref_name }}'
+          } elseif ($eventName -eq 'workflow_dispatch' -and -not [string]::IsNullOrWhiteSpace($rollbackTag)) {
+            $deployMode = 'rollback'
+            $releaseTag = $rollbackTag
+          } elseif ($eventName -eq 'workflow_dispatch' -and -not [string]::IsNullOrWhiteSpace($releaseVersion)) {
+            $deployMode = 'release'
+            $releaseTag = $releaseVersion
+          } else {
+            throw "Provide `release_version` for a normal deployment or `rollback_tag` for rollback."
+          }
+
+          if ($releaseTag -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Release tag must follow semver format, for example v1.2.3."
+          }
+
+          $releaseName = "${env:APP_NAME} $releaseTag"
+          $stagingTag = "staging-$releaseTag"
+          $appVersion = $releaseTag.TrimStart('v')
+
+          "deploy_mode=$deployMode" >> $env:GITHUB_OUTPUT
+          "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
+          "release_name=$releaseName" >> $env:GITHUB_OUTPUT
+          "staging_tag=$stagingTag" >> $env:GITHUB_OUTPUT
+          "app_version=$appVersion" >> $env:GITHUB_OUTPUT
+
+      - name: Notify failure
+        if: failure() && env.FAILURE_WEBHOOK_URL != ''
+        shell: pwsh
+        continue-on-error: false
+        run: |
+          # TODO: Adjust the JSON payload if your chat system is not Slack-compatible.
+          $payload = @{
+            text = "GitHub Actions failure: resolve-release job failed for $env:GITHUB_REPOSITORY on run $env:GITHUB_RUN_ID."
+          } | ConvertTo-Json -Compress
+          Invoke-RestMethod -Method Post -Uri $env:FAILURE_WEBHOOK_URL -ContentType 'application/json' -Body $payload
+
+  lint-and-test:
+    name: Lint And Unit Test
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.rollback_tag == ''
     runs-on: windows-latest
     timeout-minutes: 20
+    env:
+      PYTHONPATH: ${{ github.workspace }};${{ github.workspace }}\lib
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-      - name: Setup Python 3.9
-        uses: actions/setup-python@v6
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
-          cache: "pip"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
 
-      - name: Syntax check Python entry points
+      - name: Install dev dependencies
         shell: pwsh
-        run: |
-          python -m compileall -q main.py Runtime_Software.py test_SLMP.py lib
-
-  build-release:
-    name: Build and publish release
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
-    needs: ci
-    runs-on: windows-latest
-    timeout-minutes: 120
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Setup Python 3.9
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.9"
-          cache: "pip"
-
-      - name: Resolve release metadata
-        id: meta
-        shell: pwsh
-        run: |
-          git fetch --force --tags
-
-          $existingTagsForCommit = @(
-            git tag --points-at $env:GITHUB_SHA |
-              Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
-              Sort-Object {
-                $version = $_.Substring(1).Split('.')
-                [int]$version[0] * 1000000 + [int]$version[1] * 1000 + [int]$version[2]
-              }
-          )
-
-          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-            $bumpLevel = '${{ inputs.bump_level }}'
-            $prerelease = '${{ inputs.prerelease }}'
-            $makeLatest = '${{ inputs.make_latest }}'
-          } else {
-            $bumpLevel = 'patch'
-            $prerelease = 'false'
-            $makeLatest = 'true'
-          }
-
-          if ($existingTagsForCommit.Count -gt 0) {
-            $tag = $existingTagsForCommit[-1]
-            $createdTag = 'false'
-          } else {
-            $allTags = @(
-              git tag --list 'v*' |
-                Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
-                Sort-Object {
-                  $version = $_.Substring(1).Split('.')
-                  [int]$version[0] * 1000000 + [int]$version[1] * 1000 + [int]$version[2]
-                }
-            )
-
-            if ($allTags.Count -eq 0) {
-              $major = 0
-              $minor = 1
-              $patch = 0
-            } else {
-              $latest = $allTags[-1].Substring(1).Split('.')
-              $major = [int]$latest[0]
-              $minor = [int]$latest[1]
-              $patch = [int]$latest[2]
-
-              switch ($bumpLevel) {
-                'major' {
-                  $major += 1
-                  $minor = 0
-                  $patch = 0
-                }
-                'minor' {
-                  $minor += 1
-                  $patch = 0
-                }
-                default {
-                  $patch += 1
-                }
-              }
-            }
-
-            $tag = "v$major.$minor.$patch"
-            $createdTag = 'true'
-          }
-
-          $name = "DRB-OCR-AI $tag"
-          $appVersion = $tag.TrimStart('v')
-
-          "release_tag=$tag" >> $env:GITHUB_OUTPUT
-          "release_name=$name" >> $env:GITHUB_OUTPUT
-          "app_version=$appVersion" >> $env:GITHUB_OUTPUT
-          "prerelease=$prerelease" >> $env:GITHUB_OUTPUT
-          "make_latest=$makeLatest" >> $env:GITHUB_OUTPUT
-          "created_tag=$createdTag" >> $env:GITHUB_OUTPUT
-
-      - name: Create and push release tag
-        if: steps.meta.outputs.created_tag == 'true'
-        shell: pwsh
-        run: |
-          git tag ${{ steps.meta.outputs.release_tag }} $env:GITHUB_SHA
-          git push origin ${{ steps.meta.outputs.release_tag }}
-
-      - name: Install build dependencies
-        shell: pwsh
+        continue-on-error: false
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install --extra-index-url https://download.pytorch.org/whl/cu117 -r requirements.txt
-          python -m pip install --upgrade --prefer-binary `
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run flake8 lint
+        shell: pwsh
+        continue-on-error: false
+        run: |
+          flake8 main.py lib\AppLogger.py tests
+
+      - name: Run unit tests with coverage
+        shell: pwsh
+        continue-on-error: false
+        run: |
+          New-Item -ItemType Directory -Path test-results -Force | Out-Null
+          pytest tests `
+            --maxfail=1 `
+            --disable-warnings `
+            --junitxml=test-results\junit.xml `
+            --cov=AppLogger `
+            --cov-report=xml:test-results\coverage.xml `
+            --cov-report=html:test-results\htmlcov
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.run_id }}
+          path: |
+            test-results
+          if-no-files-found: warn
+
+      - name: Notify failure
+        if: failure() && env.FAILURE_WEBHOOK_URL != ''
+        shell: pwsh
+        continue-on-error: false
+        run: |
+          # TODO: Adjust the JSON payload if your chat system is not Slack-compatible.
+          $payload = @{
+            text = "GitHub Actions failure: lint-and-test job failed for $env:GITHUB_REPOSITORY on run $env:GITHUB_RUN_ID."
+          } | ConvertTo-Json -Compress
+          Invoke-RestMethod -Method Post -Uri $env:FAILURE_WEBHOOK_URL -ContentType 'application/json' -Body $payload
+
+  build-package:
+    name: Build Windows Package
+    if: needs.resolve-release.outputs.deploy_mode == 'release'
+    needs:
+      - resolve-release
+      - lint-and-test
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      BUILD_ROOT: ${{ github.workspace }}\dist
+      RELEASE_ROOT: ${{ github.workspace }}\dist\release
+      LOCAL_SMOKE_LOG_DIR: ${{ github.workspace }}\build-logs
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+
+      - name: Install production and build dependencies
+        shell: pwsh
+        continue-on-error: false
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install --extra-index-url $env:PIP_EXTRA_INDEX_URL -r requirements.txt
+          python -m pip install `
             pyinstaller==6.16.0 `
             pyinstaller-hooks-contrib==2025.8 `
-            PyYAML==6.0.2 `
-            psutil==7.0.0 `
-            numpy==1.26.4 `
-            pandas==2.1.4 `
-            pymodbus==3.8.6 `
-            PyMySQL==1.1.1 `
-            tqdm==4.67.1 `
-            pyqtgraph==0.13.7 `
-            pymcprotocol `
-            pywin32
-          python -c "import PyInstaller, yaml, psutil, numpy, pandas, pymodbus, pymysql, tqdm, pymcprotocol; print(PyInstaller.__version__); print(yaml.__file__); print(psutil.__file__)"
+            pymcprotocol==0.3.0 `
+            pywin32==311
+          python -c "import torch, torchvision, ultralytics, yaml, psutil, PyInstaller; print(torch.__version__)"
 
-      - name: Build Windows bundle with PyInstaller
+      - name: Resolve release file names
+        id: names
         shell: pwsh
+        continue-on-error: false
         run: |
-          pyinstaller `
-            --clean `
-            --noconfirm `
-            --onedir `
-            --console `
-            --name DRB-OCR-AI `
-            --collect-submodules torch `
-            --collect-submodules torchvision `
-            --collect-submodules torchinfo `
-            --collect-submodules sklearn `
-            --collect-submodules ultralytics `
-            --collect-submodules cvzone `
-            --collect-submodules pypylon `
-            --collect-submodules PIL `
-            --collect-all yaml `
-            --collect-all psutil `
-            --collect-all numpy `
-            --collect-all pandas `
-            --collect-all pymcprotocol `
-            --collect-all pymodbus `
-            --collect-all pymysql `
-            --collect-all tqdm `
-            --collect-all pyqtgraph `
-            --collect-submodules yaml `
-            --hidden-import cProfile `
-            --hidden-import logging `
-            --hidden-import logging.handlers `
-            --hidden-import pathlib `
-            --hidden-import platform `
-            --hidden-import threading `
-            --hidden-import yaml `
-            --hidden-import psutil `
-            --hidden-import numpy `
-            --hidden-import pandas `
-            --hidden-import pymcprotocol `
-            --hidden-import pymodbus `
-            --hidden-import pymysql `
-            --hidden-import tqdm `
-            --hidden-import importlib.resources `
-            --hidden-import pyqtgraph `
-            --exclude-module onnx `
-            --exclude-module onnxruntime `
-            --exclude-module transformers `
-            --exclude-module tensorrt `
-            --exclude-module cupy `
-            main.py
+          $releaseTag = '${{ needs.resolve-release.outputs.release_tag }}'
+          $zipName = "$env:APP_NAME-$releaseTag-windows-x64.zip"
+          $installerName = "$env:APP_NAME-$releaseTag-setup-x64.exe"
+          $installerBaseName = [System.IO.Path]::GetFileNameWithoutExtension($installerName)
+          "zip_name=$zipName" >> $env:GITHUB_OUTPUT
+          "installer_name=$installerName" >> $env:GITHUB_OUTPUT
+          "installer_base_name=$installerBaseName" >> $env:GITHUB_OUTPUT
 
-      - name: Copy runtime assets into distribution
-        id: package
+      - name: Build PyInstaller bundle
         shell: pwsh
+        continue-on-error: false
         run: |
-          $releaseDir = Join-Path $PWD 'dist\DRB-OCR-AI'
-          if (-not (Test-Path $releaseDir)) {
-            throw "Missing PyInstaller output directory: $releaseDir"
+          if (Test-Path build) {
+            Remove-Item build -Recurse -Force
           }
+          if (Test-Path dist) {
+            Remove-Item dist -Recurse -Force
+          }
+          pyinstaller --clean --noconfirm main.spec
 
-          $runtimeDirs = @(
-            'form_UI',
-            'Icon',
-            'RunTime_Sofware',
-            'module'
-          )
+      - name: Copy runtime assets
+        shell: pwsh
+        continue-on-error: false
+        run: |
+          $releaseDir = Join-Path $env:BUILD_ROOT $env:APP_NAME
+          $runtimeDirs = @('form_UI', 'Icon', 'RunTime_Sofware', 'module')
+
+          New-Item -ItemType Directory -Path $env:RELEASE_ROOT -Force | Out-Null
 
           foreach ($dir in $runtimeDirs) {
             if (Test-Path $dir) {
@@ -255,273 +264,359 @@ jobs:
           $libTarget = Join-Path $releaseDir 'lib'
           New-Item -ItemType Directory -Path $libTarget -Force | Out-Null
 
-          Get-ChildItem 'lib' -File |
+          Get-ChildItem lib -File |
             Where-Object { $_.Extension -in '.py', '.dll', '.txt' -and $_.Name -ne 'setup.py' } |
             Copy-Item -Destination $libTarget -Force
 
           Get-ChildItem -File -Filter '*.pt' |
             Copy-Item -Destination $releaseDir -Force
 
-          $optionalFiles = @(
-            'README.md',
-            'DRB_Metalcore_text.sql',
-            'DRB product text.xlsx'
-          )
-
-          foreach ($file in $optionalFiles) {
+          foreach ($file in @('README.md', 'DRB_Metalcore_text.sql', 'DRB product text.xlsx')) {
             if (Test-Path $file) {
               Copy-Item $file -Destination $releaseDir -Force
             }
           }
 
-          if (Test-Path 'OCR_DeepLearning_Software') {
-            Copy-Item 'OCR_DeepLearning_Software' -Destination $releaseDir -Recurse -Force
-          }
-
-          $manifest = @(
-            'Packaged by GitHub Actions'
-            "Tag: ${{ steps.meta.outputs.release_tag }}"
-            "Commit: $env:GITHUB_SHA"
-            'Included runtime directories: form_UI, Icon, RunTime_Sofware, module, lib'
-            'Optional runtime files are copied only when present in the repository checkout.'
-          )
-          Set-Content -Path (Join-Path $releaseDir 'release-manifest.txt') -Value $manifest
-
-          $assetDir = Join-Path $PWD 'dist\release'
-          New-Item -ItemType Directory -Path $assetDir -Force | Out-Null
-
-          $zipName = "DRB-OCR-AI-${{ steps.meta.outputs.release_tag }}-windows-x64.zip"
-          $zipPath = Join-Path $assetDir $zipName
-          if (Test-Path $zipPath) {
-            Remove-Item $zipPath -Force
-          }
-
-          Compress-Archive -Path $releaseDir -DestinationPath $zipPath -Force
-
-          $checksumPath = "$zipPath.sha256"
-          $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          Set-Content -Path $checksumPath -Value "$hash  $zipName" -NoNewline
-
-          "zip_path=$zipPath" >> $env:GITHUB_OUTPUT
-          "zip_checksum_path=$checksumPath" >> $env:GITHUB_OUTPUT
-
-      - name: Smoke test packaged executable
+      - name: Run pre-deploy smoke test
         shell: pwsh
+        continue-on-error: false
+        env:
+          DRB_OCR_AI_SMOKE_TEST: "1"
         run: |
-          $env:DRB_OCR_AI_SMOKE_TEST = '1'
-          $exePath = "$PWD\dist\DRB-OCR-AI\DRB-OCR-AI.exe"
-          $stdoutPath = Join-Path $env:RUNNER_TEMP 'drb-smoke-test.stdout.log'
-          $stderrPath = Join-Path $env:RUNNER_TEMP 'drb-smoke-test.stderr.log'
-          $appLogPath = Join-Path $env:LOCALAPPDATA 'DRB-OCR-AI\logs\app.log'
-          $crashLogPath = Join-Path $env:LOCALAPPDATA 'DRB-OCR-AI\logs\crash.log'
+          $releaseDir = Join-Path $env:BUILD_ROOT $env:APP_NAME
+          $exePath = Join-Path $releaseDir "$env:APP_NAME.exe"
+          $stdoutPath = Join-Path $env:LOCAL_SMOKE_LOG_DIR 'build-smoke.stdout.log'
+          $stderrPath = Join-Path $env:LOCAL_SMOKE_LOG_DIR 'build-smoke.stderr.log'
 
-          function Show-SmokeTestDiagnostics {
-            if (Test-Path $stdoutPath) {
-              Write-Host '=== Smoke test stdout ==='
-              Get-Content $stdoutPath
-            }
-            if (Test-Path $stderrPath) {
-              Write-Host '=== Smoke test stderr ==='
-              Get-Content $stderrPath
-            }
-            if (Test-Path $appLogPath) {
-              Write-Host '=== App log ==='
-              Get-Content $appLogPath
-            }
-            if (Test-Path $crashLogPath) {
-              Write-Host '=== Crash log ==='
-              Get-Content $crashLogPath
-            }
-          }
-
-          if (Test-Path $stdoutPath) {
-            Remove-Item $stdoutPath -Force
-          }
-          if (Test-Path $stderrPath) {
-            Remove-Item $stderrPath -Force
-          }
+          New-Item -ItemType Directory -Path $env:LOCAL_SMOKE_LOG_DIR -Force | Out-Null
+          if (Test-Path $stdoutPath) { Remove-Item $stdoutPath -Force }
+          if (Test-Path $stderrPath) { Remove-Item $stderrPath -Force }
 
           $process = Start-Process `
             -FilePath $exePath `
+            -WorkingDirectory $releaseDir `
             -NoNewWindow `
             -PassThru `
             -RedirectStandardOutput $stdoutPath `
             -RedirectStandardError $stderrPath
 
           if (-not $process.WaitForExit(120000)) {
-            try {
-              $process.Kill($true)
-            } catch {
-            }
-            Show-SmokeTestDiagnostics
-            throw "Packaged executable smoke test timed out after 120 seconds"
+            try { $process.Kill($true) } catch {}
+            throw "Smoke test timed out after 120 seconds."
           }
 
           if ($process.ExitCode -ne 0) {
-            Show-SmokeTestDiagnostics
-            throw "Packaged executable smoke test failed with exit code $($process.ExitCode)"
+            if (Test-Path $stdoutPath) { Get-Content $stdoutPath }
+            if (Test-Path $stderrPath) { Get-Content $stderrPath }
+            throw "Smoke test failed with exit code $($process.ExitCode)."
           }
 
-      - name: Resolve Inno Setup compiler
-        id: innosetup
+      - name: Build portable archive
         shell: pwsh
+        continue-on-error: false
         run: |
-          function Find-Iscc {
-            $command = Get-Command iscc.exe -ErrorAction SilentlyContinue
-            if ($command) {
-              return $command.Source
-            }
-
-            $candidates = @(
-              "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
-              "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
-            )
-
-            foreach ($candidate in $candidates) {
-              if (Test-Path $candidate) {
-                return $candidate
-              }
-            }
-
-            $registryKeys = @(
-              'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1',
-              'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1'
-            )
-
-            foreach ($key in $registryKeys) {
-              if (-not (Test-Path $key)) {
-                continue
-              }
-
-              $installLocation = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).InstallLocation
-              if (-not $installLocation) {
-                continue
-              }
-
-              $candidate = Join-Path $installLocation 'ISCC.exe'
-              if (Test-Path $candidate) {
-                return $candidate
-              }
-            }
-
-            return $null
+          $releaseDir = Join-Path $env:BUILD_ROOT $env:APP_NAME
+          $zipPath = Join-Path $env:RELEASE_ROOT '${{ steps.names.outputs.zip_name }}'
+          if (Test-Path $zipPath) {
+            Remove-Item $zipPath -Force
           }
+          Compress-Archive -Path $releaseDir -DestinationPath $zipPath -Force
 
-          $iscc = Find-Iscc
-          if (-not $iscc) {
-            choco upgrade innosetup --no-progress -y
-            $iscc = Find-Iscc
-          }
-
-          if (-not $iscc) {
-            throw "ISCC.exe not found after resolving Inno Setup."
-          }
-
-          $isccDir = Split-Path $iscc -Parent
-          $isccDir >> $env:GITHUB_PATH
-          "iscc_path=$iscc" >> $env:GITHUB_OUTPUT
-          Write-Host "Using Inno Setup compiler at $iscc"
-
-      - name: Build installer with Inno Setup
-        id: installer
+      - name: Install Inno Setup
         shell: pwsh
+        continue-on-error: false
         run: |
-          $releaseDir = Join-Path $PWD 'dist\DRB-OCR-AI'
-          $installerDir = Join-Path $PWD 'dist\installer'
-          New-Item -ItemType Directory -Path $installerDir -Force | Out-Null
+          choco install innosetup --version=6.4.3 --no-progress -y
 
-          $outputBase = "DRB-OCR-AI-${{ steps.meta.outputs.release_tag }}-setup-x64"
-          $iscc = '${{ steps.innosetup.outputs.iscc_path }}'
-
+      - name: Build Windows installer
+        shell: pwsh
+        continue-on-error: false
+        run: |
+          $isccCandidates = @(
+            "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $iscc) {
-            throw "ISCC.exe not found."
+            throw "ISCC.exe was not found after installing Inno Setup."
           }
 
+          $releaseDir = Join-Path $env:BUILD_ROOT $env:APP_NAME
           & $iscc `
-            "/DAppVersion=${{ steps.meta.outputs.app_version }}" `
+            "/DAppVersion=${{ needs.resolve-release.outputs.app_version }}" `
             "/DSourceDir=$releaseDir" `
-            "/DRepoRoot=$PWD" `
-            "/DOutputDir=$installerDir" `
-            "/DOutputBaseFilename=$outputBase" `
+            "/DRepoRoot=$env:GITHUB_WORKSPACE" `
+            "/DOutputDir=$env:RELEASE_ROOT" `
+            "/DOutputBaseFilename=${{ steps.names.outputs.installer_base_name }}" `
             "installer\DRB-OCR-AI.iss"
 
-          $installerPath = Join-Path $installerDir "$outputBase.exe"
-          if (-not (Test-Path $installerPath)) {
-            throw "Missing generated installer: $installerPath"
-          }
-
-          $installerChecksumPath = "$installerPath.sha256"
-          $hash = (Get-FileHash -Path $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          Set-Content -Path $installerChecksumPath -Value "$hash  $(Split-Path $installerPath -Leaf)" -NoNewline
-
-          "installer_path=$installerPath" >> $env:GITHUB_OUTPUT
-          "installer_checksum_path=$installerChecksumPath" >> $env:GITHUB_OUTPUT
-
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v6
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: drb-ocr-ai-${{ steps.meta.outputs.release_tag }}-windows-x64
+          name: build-logs-${{ github.run_id }}
           path: |
-            ${{ steps.package.outputs.zip_path }}
-            ${{ steps.package.outputs.zip_checksum_path }}
-            ${{ steps.installer.outputs.installer_path }}
-            ${{ steps.installer.outputs.installer_checksum_path }}
+            build-logs
+            ${{ runner.temp }}\drb-ocr-ai\logs
+          if-no-files-found: warn
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ needs.resolve-release.outputs.release_tag }}
+          path: |
+            dist\release\${{ steps.names.outputs.zip_name }}
+            dist\release\${{ steps.names.outputs.installer_name }}
           if-no-files-found: error
 
-      - name: Create or update GitHub Release
+      - name: Notify failure
+        if: failure() && env.FAILURE_WEBHOOK_URL != ''
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
-          RELEASE_NAME: ${{ steps.meta.outputs.release_name }}
-          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
-          MAKE_LATEST: ${{ steps.meta.outputs.make_latest }}
-          ZIP_PATH: ${{ steps.package.outputs.zip_path }}
-          ZIP_CHECKSUM_PATH: ${{ steps.package.outputs.zip_checksum_path }}
-          INSTALLER_PATH: ${{ steps.installer.outputs.installer_path }}
-          INSTALLER_CHECKSUM_PATH: ${{ steps.installer.outputs.installer_checksum_path }}
+        continue-on-error: false
         run: |
-          gh release view $env:RELEASE_TAG *> $null
-          $releaseExists = $LASTEXITCODE -eq 0
+          # TODO: Adjust the JSON payload if your chat system is not Slack-compatible.
+          $payload = @{
+            text = "GitHub Actions failure: build-package job failed for $env:GITHUB_REPOSITORY on run $env:GITHUB_RUN_ID."
+          } | ConvertTo-Json -Compress
+          Invoke-RestMethod -Method Post -Uri $env:FAILURE_WEBHOOK_URL -ContentType 'application/json' -Body $payload
 
-          if ($releaseExists) {
-            $editArgs = @(
-              'release', 'edit', $env:RELEASE_TAG,
-              '--title', $env:RELEASE_NAME,
-              '--target', $env:GITHUB_SHA
-            )
+  deploy-staging:
+    name: Deploy To Staging
+    if: always() && needs.resolve-release.result == 'success' && (needs.build-package.result == 'success' || needs.build-package.result == 'skipped')
+    needs:
+      - resolve-release
+      - build-package
+    runs-on: windows-latest
+    environment:
+      name: staging
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+      VERIFY_ROOT: ${{ github.workspace }}\release-health\staging
 
-            if ($env:PRERELEASE -eq 'true') {
-              $editArgs += '--prerelease'
-            }
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-            if ($env:MAKE_LATEST -eq 'true') {
-              $editArgs += '--latest'
-            }
+      - name: Download build artifacts
+        if: needs.resolve-release.outputs.deploy_mode == 'release'
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets-${{ needs.resolve-release.outputs.release_tag }}
+          path: release-assets
 
-            & gh @editArgs
-            gh release upload $env:RELEASE_TAG $env:ZIP_PATH $env:ZIP_CHECKSUM_PATH $env:INSTALLER_PATH $env:INSTALLER_CHECKSUM_PATH --clobber
-          } else {
-            $createArgs = @(
-              'release', 'create', $env:RELEASE_TAG,
-              $env:ZIP_PATH,
-              $env:ZIP_CHECKSUM_PATH,
-              $env:INSTALLER_PATH,
-              $env:INSTALLER_CHECKSUM_PATH,
-              '--title', $env:RELEASE_NAME,
-              '--generate-notes',
-              '--target', $env:GITHUB_SHA
-            )
+      - name: Verify GitHub CLI
+        shell: pwsh
+        continue-on-error: false
+        run: |
+          gh --version
 
-            if ($env:PRERELEASE -eq 'true') {
-              $createArgs += '--prerelease'
-            }
+      - name: Publish staging prerelease
+        if: needs.resolve-release.outputs.deploy_mode == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GH_RELEASE_TOKEN }}
+          tag_name: ${{ needs.resolve-release.outputs.staging_tag }}
+          name: ${{ needs.resolve-release.outputs.release_name }} - Staging
+          prerelease: true
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          files: |
+            release-assets/*.zip
+            release-assets/*.exe
 
-            if ($env:MAKE_LATEST -eq 'true') {
-              $createArgs += '--latest'
-            } else {
-              $createArgs += '--latest=false'
-            }
+      - name: Prepare rollback candidate
+        if: needs.resolve-release.outputs.deploy_mode == 'rollback'
+        shell: pwsh
+        continue-on-error: false
+        run: |
+          New-Item -ItemType Directory -Path release-assets -Force | Out-Null
+          gh release download '${{ needs.resolve-release.outputs.release_tag }}' --pattern '*.zip' --pattern '*.exe' --dir release-assets --clobber
 
-            & gh @createArgs
+      - name: Re-publish rollback candidate to staging
+        if: needs.resolve-release.outputs.deploy_mode == 'rollback'
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GH_RELEASE_TOKEN }}
+          tag_name: ${{ needs.resolve-release.outputs.staging_tag }}
+          name: ${{ needs.resolve-release.outputs.release_name }} - Rollback Validation
+          prerelease: true
+          generate_release_notes: false
+          files: |
+            release-assets/*.zip
+            release-assets/*.exe
+
+      - name: Run post-deploy staging health check
+        shell: pwsh
+        continue-on-error: false
+        env:
+          DRB_OCR_AI_SMOKE_TEST: "1"
+        run: |
+          New-Item -ItemType Directory -Path $env:VERIFY_ROOT -Force | Out-Null
+          gh release download '${{ needs.resolve-release.outputs.staging_tag }}' --pattern '*.zip' --dir $env:VERIFY_ROOT --clobber
+
+          $zipPath = Get-ChildItem -Path $env:VERIFY_ROOT -Filter '*.zip' | Select-Object -First 1
+          if (-not $zipPath) {
+            throw "No staging ZIP artifact was downloaded."
           }
+
+          $portableRoot = Join-Path $env:VERIFY_ROOT 'portable'
+          Expand-Archive -Path $zipPath.FullName -DestinationPath $portableRoot -Force
+
+          $exePath = Get-ChildItem -Path $portableRoot -Recurse -Filter "$env:APP_NAME.exe" | Select-Object -First 1
+          if (-not $exePath) {
+            throw "Packaged executable was not found in staging artifact."
+          }
+
+          $stdoutPath = Join-Path $env:VERIFY_ROOT 'staging-smoke.stdout.log'
+          $stderrPath = Join-Path $env:VERIFY_ROOT 'staging-smoke.stderr.log'
+
+          $process = Start-Process `
+            -FilePath $exePath.FullName `
+            -WorkingDirectory $exePath.DirectoryName `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath
+
+          if (-not $process.WaitForExit(120000)) {
+            try { $process.Kill($true) } catch {}
+            throw "Staging health check timed out after 120 seconds."
+          }
+
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path $stdoutPath) { Get-Content $stdoutPath }
+            if (Test-Path $stderrPath) { Get-Content $stderrPath }
+            throw "Staging health check failed with exit code $($process.ExitCode)."
+          }
+
+      - name: Upload staging health logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-health-${{ github.run_id }}
+          path: |
+            release-health\staging
+          if-no-files-found: warn
+
+      - name: Notify failure
+        if: failure() && env.FAILURE_WEBHOOK_URL != ''
+        shell: pwsh
+        continue-on-error: false
+        run: |
+          # TODO: Adjust the JSON payload if your chat system is not Slack-compatible.
+          $payload = @{
+            text = "GitHub Actions failure: deploy-staging job failed for $env:GITHUB_REPOSITORY on run $env:GITHUB_RUN_ID."
+          } | ConvertTo-Json -Compress
+          Invoke-RestMethod -Method Post -Uri $env:FAILURE_WEBHOOK_URL -ContentType 'application/json' -Body $payload
+
+  deploy-production:
+    name: Promote To Production
+    if: always() && needs.resolve-release.result == 'success' && needs.deploy-staging.result == 'success'
+    needs:
+      - resolve-release
+      - deploy-staging
+    runs-on: windows-latest
+    environment:
+      name: production
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+      VERIFY_ROOT: ${{ github.workspace }}\release-health\production
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        if: needs.resolve-release.outputs.deploy_mode == 'release'
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets-${{ needs.resolve-release.outputs.release_tag }}
+          path: release-assets
+
+      - name: Promote release to production
+        if: needs.resolve-release.outputs.deploy_mode == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GH_RELEASE_TOKEN }}
+          tag_name: ${{ needs.resolve-release.outputs.release_tag }}
+          name: ${{ needs.resolve-release.outputs.release_name }}
+          prerelease: false
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          make_latest: true
+          files: |
+            release-assets/*.zip
+            release-assets/*.exe
+
+      - name: Re-promote rollback tag as latest
+        if: needs.resolve-release.outputs.deploy_mode == 'rollback'
+        shell: pwsh
+        continue-on-error: false
+        run: |
+          gh release edit '${{ needs.resolve-release.outputs.release_tag }}' --latest
+
+      - name: Run post-deploy production health check
+        shell: pwsh
+        continue-on-error: false
+        env:
+          DRB_OCR_AI_SMOKE_TEST: "1"
+        run: |
+          New-Item -ItemType Directory -Path $env:VERIFY_ROOT -Force | Out-Null
+          gh release download '${{ needs.resolve-release.outputs.release_tag }}' --pattern '*.zip' --dir $env:VERIFY_ROOT --clobber
+
+          $zipPath = Get-ChildItem -Path $env:VERIFY_ROOT -Filter '*.zip' | Select-Object -First 1
+          if (-not $zipPath) {
+            throw "No production ZIP artifact was downloaded."
+          }
+
+          $portableRoot = Join-Path $env:VERIFY_ROOT 'portable'
+          Expand-Archive -Path $zipPath.FullName -DestinationPath $portableRoot -Force
+
+          $exePath = Get-ChildItem -Path $portableRoot -Recurse -Filter "$env:APP_NAME.exe" | Select-Object -First 1
+          if (-not $exePath) {
+            throw "Packaged executable was not found in production artifact."
+          }
+
+          $stdoutPath = Join-Path $env:VERIFY_ROOT 'production-smoke.stdout.log'
+          $stderrPath = Join-Path $env:VERIFY_ROOT 'production-smoke.stderr.log'
+
+          $process = Start-Process `
+            -FilePath $exePath.FullName `
+            -WorkingDirectory $exePath.DirectoryName `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath
+
+          if (-not $process.WaitForExit(120000)) {
+            try { $process.Kill($true) } catch {}
+            throw "Production health check timed out after 120 seconds."
+          }
+
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path $stdoutPath) { Get-Content $stdoutPath }
+            if (Test-Path $stderrPath) { Get-Content $stderrPath }
+            throw "Production health check failed with exit code $($process.ExitCode)."
+          }
+
+      - name: Upload production health logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-health-${{ github.run_id }}
+          path: |
+            release-health\production
+          if-no-files-found: warn
+
+      - name: Notify failure
+        if: failure() && env.FAILURE_WEBHOOK_URL != ''
+        shell: pwsh
+        continue-on-error: false
+        run: |
+          # TODO: Adjust the JSON payload if your chat system is not Slack-compatible.
+          $payload = @{
+            text = "GitHub Actions failure: deploy-production job failed for $env:GITHUB_REPOSITORY on run $env:GITHUB_RUN_ID."
+          } | ConvertTo-Json -Compress
+          Invoke-RestMethod -Method Post -Uri $env:FAILURE_WEBHOOK_URL -ContentType 'application/json' -Body $payload
