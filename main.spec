@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 
@@ -10,12 +11,36 @@ excludes = [
     'cupy',
 ]
 
+datas = []
+binaries = []
+hiddenimports = ['logging', 'logging.handlers', 'pathlib', 'platform', 'threading', 'yaml']
+
+extra_runtime_packages = [
+    'yaml',
+    'psutil',
+    'numpy',
+    'pandas',
+    'pymcprotocol',
+    'pymodbus',
+    'pymysql',
+    'tqdm',
+    'pyqtgraph',
+]
+
+for package_name in extra_runtime_packages:
+    package_datas, package_binaries, package_hiddenimports = collect_all(package_name)
+    datas += package_datas
+    binaries += package_binaries
+    hiddenimports += package_hiddenimports
+
+hiddenimports = sorted(set(hiddenimports))
+
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
-    datas=[],
-    hiddenimports=['logging', 'logging.handlers', 'pathlib', 'platform', 'threading', 'yaml'],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

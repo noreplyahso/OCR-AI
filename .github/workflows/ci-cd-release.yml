@@ -166,7 +166,7 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install --extra-index-url https://download.pytorch.org/whl/cu117 -r requirements.txt
           python -m pip install pyinstaller==6.16.0 pyinstaller-hooks-contrib==2025.8 pymcprotocol pywin32 PyYAML==6.0.2
-          python -c "import PyInstaller, yaml; print(PyInstaller.__version__); print(yaml.__file__)"
+          python -c "import PyInstaller, yaml, psutil, numpy, pandas, pymodbus, pymysql, tqdm, pymcprotocol; print(PyInstaller.__version__); print(yaml.__file__); print(psutil.__file__)"
 
       - name: Build Windows bundle with PyInstaller
         shell: pwsh
@@ -185,6 +185,15 @@ jobs:
             --collect-submodules cvzone `
             --collect-submodules pypylon `
             --collect-submodules PIL `
+            --collect-all yaml `
+            --collect-all psutil `
+            --collect-all numpy `
+            --collect-all pandas `
+            --collect-all pymcprotocol `
+            --collect-all pymodbus `
+            --collect-all pymysql `
+            --collect-all tqdm `
+            --collect-all pyqtgraph `
             --collect-submodules yaml `
             --hidden-import cProfile `
             --hidden-import logging `
@@ -193,6 +202,13 @@ jobs:
             --hidden-import platform `
             --hidden-import threading `
             --hidden-import yaml `
+            --hidden-import psutil `
+            --hidden-import numpy `
+            --hidden-import pandas `
+            --hidden-import pymcprotocol `
+            --hidden-import pymodbus `
+            --hidden-import pymysql `
+            --hidden-import tqdm `
             --hidden-import importlib.resources `
             --hidden-import pyqtgraph `
             --exclude-module onnx `

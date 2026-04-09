@@ -7,6 +7,15 @@ pyinstaller --noconfirm --onedir --windowed ^
   --collect-submodules cvzone ^
   --collect-submodules pypylon ^
   --collect-submodules PIL ^
+  --collect-all yaml ^
+  --collect-all psutil ^
+  --collect-all numpy ^
+  --collect-all pandas ^
+  --collect-all pymcprotocol ^
+  --collect-all pymodbus ^
+  --collect-all pymysql ^
+  --collect-all tqdm ^
+  --collect-all pyqtgraph ^
   --collect-submodules yaml ^
   --hidden-import cProfile ^
   --hidden-import logging ^
@@ -15,6 +24,13 @@ pyinstaller --noconfirm --onedir --windowed ^
   --hidden-import platform ^
   --hidden-import threading ^
   --hidden-import yaml ^
+  --hidden-import psutil ^
+  --hidden-import numpy ^
+  --hidden-import pandas ^
+  --hidden-import pymcprotocol ^
+  --hidden-import pymodbus ^
+  --hidden-import pymysql ^
+  --hidden-import tqdm ^
   --hidden-import importlib.resources ^
   --hidden-import pyqtgraph ^
   --icon "E:\VISION CENTER LOGO\LOGO ICON.ico" ^
