@@ -16,6 +16,15 @@ binaries = []
 hiddenimports = ['logging', 'logging.handlers', 'pathlib', 'platform', 'threading', 'yaml']
 
 extra_runtime_packages = [
+    'torch',
+    'torchvision',
+    'torchinfo',
+    'sklearn',
+    'ultralytics',
+    'cvzone',
+    'pypylon',
+    'PIL',
+    'cv2',
     'yaml',
     'psutil',
     'numpy',

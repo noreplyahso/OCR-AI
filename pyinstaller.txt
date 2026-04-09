@@ -1,12 +1,13 @@
 pyinstaller --noconfirm --onedir --windowed ^
-  --collect-submodules torch ^
-  --collect-submodules torchvision ^
-  --collect-submodules torchinfo ^
-  --collect-submodules sklearn ^
-  --collect-submodules ultralytics ^
-  --collect-submodules cvzone ^
-  --collect-submodules pypylon ^
-  --collect-submodules PIL ^
+  --collect-all torch ^
+  --collect-all torchvision ^
+  --collect-all torchinfo ^
+  --collect-all sklearn ^
+  --collect-all ultralytics ^
+  --collect-all cvzone ^
+  --collect-all pypylon ^
+  --collect-all PIL ^
+  --collect-all cv2 ^
   --collect-all yaml ^
   --collect-all psutil ^
   --collect-all numpy ^
@@ -27,6 +28,15 @@ pyinstaller --noconfirm --onedir --windowed ^
   --hidden-import psutil ^
   --hidden-import numpy ^
   --hidden-import pandas ^
+  --hidden-import torch ^
+  --hidden-import torchvision ^
+  --hidden-import torchinfo ^
+  --hidden-import sklearn ^
+  --hidden-import ultralytics ^
+  --hidden-import cvzone ^
+  --hidden-import pypylon ^
+  --hidden-import PIL ^
+  --hidden-import cv2 ^
   --hidden-import pymcprotocol ^
   --hidden-import pymodbus ^
   --hidden-import pymysql ^
