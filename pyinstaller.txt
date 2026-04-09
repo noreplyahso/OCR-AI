@@ -7,12 +7,14 @@ pyinstaller --noconfirm --onedir --windowed ^
   --collect-submodules cvzone ^
   --collect-submodules pypylon ^
   --collect-submodules PIL ^
+  --collect-submodules yaml ^
   --hidden-import cProfile ^
   --hidden-import logging ^
   --hidden-import logging.handlers ^
   --hidden-import pathlib ^
   --hidden-import platform ^
   --hidden-import threading ^
+  --hidden-import yaml ^
   --hidden-import importlib.resources ^
   --hidden-import pyqtgraph ^
   --icon "E:\VISION CENTER LOGO\LOGO ICON.ico" ^
