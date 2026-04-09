@@ -270,21 +270,64 @@ jobs:
           "zip_path=$zipPath" >> $env:GITHUB_OUTPUT
           "zip_checksum_path=$checksumPath" >> $env:GITHUB_OUTPUT
 
-      - name: Install Inno Setup
+      - name: Resolve Inno Setup compiler
+        id: innosetup
         shell: pwsh
         run: |
-          winget install --id JRSoftware.InnoSetup -e --silent --accept-package-agreements --accept-source-agreements
+          function Find-Iscc {
+            $command = Get-Command iscc.exe -ErrorAction SilentlyContinue
+            if ($command) {
+              return $command.Source
+            }
 
-          $candidates = @(
-            "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
-            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
-          )
+            $candidates = @(
+              "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
+              "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+            )
 
-          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $iscc) {
-            throw "ISCC.exe not found after installing Inno Setup."
+            foreach ($candidate in $candidates) {
+              if (Test-Path $candidate) {
+                return $candidate
+              }
+            }
+
+            $registryKeys = @(
+              'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1',
+              'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1'
+            )
+
+            foreach ($key in $registryKeys) {
+              if (-not (Test-Path $key)) {
+                continue
+              }
+
+              $installLocation = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).InstallLocation
+              if (-not $installLocation) {
+                continue
+              }
+
+              $candidate = Join-Path $installLocation 'ISCC.exe'
+              if (Test-Path $candidate) {
+                return $candidate
+              }
+            }
+
+            return $null
           }
 
+          $iscc = Find-Iscc
+          if (-not $iscc) {
+            choco upgrade innosetup --no-progress -y
+            $iscc = Find-Iscc
+          }
+
+          if (-not $iscc) {
+            throw "ISCC.exe not found after resolving Inno Setup."
+          }
+
+          $isccDir = Split-Path $iscc -Parent
+          $isccDir >> $env:GITHUB_PATH
+          "iscc_path=$iscc" >> $env:GITHUB_OUTPUT
           Write-Host "Using Inno Setup compiler at $iscc"
 
       - name: Build installer with Inno Setup
@@ -296,11 +339,7 @@ jobs:
           New-Item -ItemType Directory -Path $installerDir -Force | Out-Null
 
           $outputBase = "DRB-OCR-AI-${{ steps.meta.outputs.release_tag }}-setup-x64"
-          $candidates = @(
-            "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
-            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
-          )
-          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          $iscc = '${{ steps.innosetup.outputs.iscc_path }}'
 
           if (-not $iscc) {
             throw "ISCC.exe not found."
