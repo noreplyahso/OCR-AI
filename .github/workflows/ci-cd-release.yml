@@ -1,0 +1,274 @@
+name: ci-cd-release
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag to create or update, for example v1.2.3"
+        required: true
+        type: string
+      release_name:
+        description: "Optional release title override"
+        required: false
+        type: string
+      prerelease:
+        description: "Mark the manual release as a prerelease"
+        required: false
+        default: false
+        type: boolean
+      make_latest:
+        description: "Mark the manual release as Latest"
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: CI
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python 3.9
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.9"
+          cache: "pip"
+
+      - name: Syntax check Python entry points
+        shell: pwsh
+        run: |
+          python -m compileall -q main.py Runtime_Software.py test_SLMP.py lib
+
+  build-release:
+    name: Build and publish release
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: ci
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python 3.9
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.9"
+          cache: "pip"
+
+      - name: Resolve release metadata
+        id: meta
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            $tag = '${{ inputs.release_tag }}'
+            if ('${{ inputs.release_name }}' -ne '') {
+              $name = '${{ inputs.release_name }}'
+            } else {
+              $name = "DRB-OCR-AI $tag"
+            }
+            $prerelease = '${{ inputs.prerelease }}'
+            $makeLatest = '${{ inputs.make_latest }}'
+          } else {
+            $tag = '${{ github.ref_name }}'
+            $name = "DRB-OCR-AI $tag"
+            $prerelease = 'false'
+            $makeLatest = 'true'
+          }
+
+          "release_tag=$tag" >> $env:GITHUB_OUTPUT
+          "release_name=$name" >> $env:GITHUB_OUTPUT
+          "prerelease=$prerelease" >> $env:GITHUB_OUTPUT
+          "make_latest=$makeLatest" >> $env:GITHUB_OUTPUT
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install --extra-index-url https://download.pytorch.org/whl/cu117 -r requirements.txt
+          python -m pip install pymcprotocol pywin32
+
+      - name: Build Windows bundle with PyInstaller
+        shell: pwsh
+        run: |
+          python -m PyInstaller `
+            --clean `
+            --noconfirm `
+            --onedir `
+            --console `
+            --name DRB-OCR-AI `
+            --collect-submodules torch `
+            --collect-submodules torchvision `
+            --collect-submodules torchinfo `
+            --collect-submodules sklearn `
+            --collect-submodules ultralytics `
+            --collect-submodules cvzone `
+            --collect-submodules pypylon `
+            --collect-submodules PIL `
+            --hidden-import cProfile `
+            --hidden-import importlib.resources `
+            --hidden-import pyqtgraph `
+            --exclude-module onnx `
+            --exclude-module onnxruntime `
+            --exclude-module transformers `
+            --exclude-module tensorrt `
+            --exclude-module cupy `
+            main.py
+
+      - name: Copy runtime assets into distribution
+        id: package
+        shell: pwsh
+        run: |
+          $releaseDir = Join-Path $PWD 'dist\DRB-OCR-AI'
+          if (-not (Test-Path $releaseDir)) {
+            throw "Missing PyInstaller output directory: $releaseDir"
+          }
+
+          $runtimeDirs = @(
+            'form_UI',
+            'Icon',
+            'RunTime_Sofware',
+            'module'
+          )
+
+          foreach ($dir in $runtimeDirs) {
+            if (Test-Path $dir) {
+              Copy-Item $dir -Destination $releaseDir -Recurse -Force
+            }
+          }
+
+          $libTarget = Join-Path $releaseDir 'lib'
+          New-Item -ItemType Directory -Path $libTarget -Force | Out-Null
+
+          Get-ChildItem 'lib' -File |
+            Where-Object { $_.Extension -in '.py', '.dll', '.txt' -and $_.Name -ne 'setup.py' } |
+            Copy-Item -Destination $libTarget -Force
+
+          Get-ChildItem -File -Filter '*.pt' |
+            Copy-Item -Destination $releaseDir -Force
+
+          $optionalFiles = @(
+            'README.md',
+            'DRB_Metalcore_text.sql',
+            'DRB product text.xlsx'
+          )
+
+          foreach ($file in $optionalFiles) {
+            if (Test-Path $file) {
+              Copy-Item $file -Destination $releaseDir -Force
+            }
+          }
+
+          if (Test-Path 'OCR_DeepLearning_Software') {
+            Copy-Item 'OCR_DeepLearning_Software' -Destination $releaseDir -Recurse -Force
+          }
+
+          $manifest = @(
+            'Packaged by GitHub Actions'
+            "Tag: ${{ steps.meta.outputs.release_tag }}"
+            "Commit: $env:GITHUB_SHA"
+            'Included runtime directories: form_UI, Icon, RunTime_Sofware, module, lib'
+            'Optional runtime files are copied only when present in the repository checkout.'
+          )
+          Set-Content -Path (Join-Path $releaseDir 'release-manifest.txt') -Value $manifest
+
+          $assetDir = Join-Path $PWD 'dist\release'
+          New-Item -ItemType Directory -Path $assetDir -Force | Out-Null
+
+          $zipName = "DRB-OCR-AI-${{ steps.meta.outputs.release_tag }}-windows-x64.zip"
+          $zipPath = Join-Path $assetDir $zipName
+          if (Test-Path $zipPath) {
+            Remove-Item $zipPath -Force
+          }
+
+          Compress-Archive -Path $releaseDir -DestinationPath $zipPath -Force
+
+          $checksumPath = "$zipPath.sha256"
+          $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path $checksumPath -Value "$hash  $zipName" -NoNewline
+
+          "asset_path=$zipPath" >> $env:GITHUB_OUTPUT
+          "checksum_path=$checksumPath" >> $env:GITHUB_OUTPUT
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: drb-ocr-ai-${{ steps.meta.outputs.release_tag }}-windows-x64
+          path: |
+            ${{ steps.package.outputs.asset_path }}
+            ${{ steps.package.outputs.checksum_path }}
+          if-no-files-found: error
+
+      - name: Create or update GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
+          RELEASE_NAME: ${{ steps.meta.outputs.release_name }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+          MAKE_LATEST: ${{ steps.meta.outputs.make_latest }}
+          ASSET_PATH: ${{ steps.package.outputs.asset_path }}
+          CHECKSUM_PATH: ${{ steps.package.outputs.checksum_path }}
+        run: |
+          gh release view $env:RELEASE_TAG *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
+
+          if ($releaseExists) {
+            $editArgs = @(
+              'release', 'edit', $env:RELEASE_TAG,
+              '--title', $env:RELEASE_NAME,
+              '--target', $env:GITHUB_SHA
+            )
+
+            if ($env:PRERELEASE -eq 'true') {
+              $editArgs += '--prerelease'
+            }
+
+            if ($env:MAKE_LATEST -eq 'true') {
+              $editArgs += '--latest'
+            }
+
+            & gh @editArgs
+            gh release upload $env:RELEASE_TAG $env:ASSET_PATH $env:CHECKSUM_PATH --clobber
+          } else {
+            $createArgs = @(
+              'release', 'create', $env:RELEASE_TAG,
+              $env:ASSET_PATH,
+              $env:CHECKSUM_PATH,
+              '--title', $env:RELEASE_NAME,
+              '--generate-notes',
+              '--target', $env:GITHUB_SHA
+            )
+
+            if ($env:PRERELEASE -eq 'true') {
+              $createArgs += '--prerelease'
+            }
+
+            if ($env:MAKE_LATEST -eq 'true') {
+              $createArgs += '--latest'
+            } else {
+              $createArgs += '--latest=false'
+            }
+
+            & gh @createArgs
+          }
