@@ -279,9 +279,19 @@ jobs:
         shell: pwsh
         run: |
           $env:DRB_OCR_AI_SMOKE_TEST = '1'
-          & "$PWD\dist\DRB-OCR-AI\DRB-OCR-AI.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "Packaged executable smoke test failed with exit code $LASTEXITCODE"
+          $exePath = "$PWD\dist\DRB-OCR-AI\DRB-OCR-AI.exe"
+          $process = Start-Process -FilePath $exePath -NoNewWindow -PassThru
+
+          if (-not $process.WaitForExit(120000)) {
+            try {
+              $process.Kill($true)
+            } catch {
+            }
+            throw "Packaged executable smoke test timed out after 120 seconds"
+          }
+
+          if ($process.ExitCode -ne 0) {
+            throw "Packaged executable smoke test failed with exit code $($process.ExitCode)"
           }
 
       - name: Resolve Inno Setup compiler
