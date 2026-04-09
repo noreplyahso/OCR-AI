@@ -163,12 +163,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install --extra-index-url https://download.pytorch.org/whl/cu117 -r requirements.txt
-          python -m pip install pymcprotocol pywin32
+          python -m pip install pyinstaller==6.16.0 pyinstaller-hooks-contrib==2025.8 pymcprotocol pywin32
+          python -c "import PyInstaller; print(PyInstaller.__version__)"
 
       - name: Build Windows bundle with PyInstaller
         shell: pwsh
         run: |
-          python -m PyInstaller `
+          pyinstaller `
             --clean `
             --noconfirm `
             --onedir `
