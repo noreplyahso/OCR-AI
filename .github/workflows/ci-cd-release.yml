@@ -165,7 +165,19 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install --extra-index-url https://download.pytorch.org/whl/cu117 -r requirements.txt
-          python -m pip install pyinstaller==6.16.0 pyinstaller-hooks-contrib==2025.8 pymcprotocol pywin32 PyYAML==6.0.2
+          python -m pip install --upgrade --prefer-binary `
+            pyinstaller==6.16.0 `
+            pyinstaller-hooks-contrib==2025.8 `
+            PyYAML==6.0.2 `
+            psutil==7.0.0 `
+            numpy==1.26.4 `
+            pandas==2.1.4 `
+            pymodbus==3.8.6 `
+            PyMySQL==1.1.1 `
+            tqdm==4.67.1 `
+            pyqtgraph==0.13.7 `
+            pymcprotocol `
+            pywin32
           python -c "import PyInstaller, yaml, psutil, numpy, pandas, pymodbus, pymysql, tqdm, pymcprotocol; print(PyInstaller.__version__); print(yaml.__file__); print(psutil.__file__)"
 
       - name: Build Windows bundle with PyInstaller
