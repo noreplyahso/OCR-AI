@@ -401,8 +401,8 @@ class ReferenceImage(QGraphicsScene):
                     + f"_{now.microsecond // 1000:03d}"
                 )
                 roi_crop_name = f"{current_time}_{idx}.bmp"
-                os.makedirs(f"{self.drive}/Crop Image", exist_ok=True)
-                save_path = os.path.join(f"{self.drive}/Crop Image", roi_crop_name)
+                os.makedirs(self.crop_dir, exist_ok=True)
+                save_path = os.path.join(self.crop_dir, roi_crop_name)
                 cv2.imwrite(save_path, roi_crop_rotated)
 
     @catch_errors
@@ -506,15 +506,11 @@ class ReferenceImage(QGraphicsScene):
             now.strftime("%Y_%m_%d_%H_%M_%S") + f"_{now.microsecond // 1000:03d}"
         )
         img_name = f"{result}_{self.GUI.current_product}_{current_time}.bmp"
-        os.makedirs(
-            f"{self.drive}/DRB Metalcore Text Result/{now.strftime('%d_%m_%Y')}/{result}",
-            exist_ok=True,
+        result_dir = os.path.join(
+            self.result_dir, now.strftime("%d_%m_%Y"), str(result)
         )
-        # save_path_1 = os.path.join(f"{self.drive}/DRB Metalcore Text Result", img_name)
-        save_path_2 = os.path.join(
-            f"{self.drive}/DRB Metalcore Text Result/{now.strftime('%d_%m_%Y')}/{result}",
-            img_name,
-        )
+        os.makedirs(result_dir, exist_ok=True)
+        save_path_2 = os.path.join(result_dir, img_name)
         # cv2.imwrite(save_path_1, image_arr)
         cv2.imwrite(save_path_2, image_arr)
 
@@ -526,5 +522,9 @@ class ReferenceImage(QGraphicsScene):
         else:
             # Neu chay tu file python
             base_dir = os.path.dirname(os.path.abspath(__file__))
-        # Lấy ổ đĩa (C:\, D:\, E:\ ...)
+        self.base_dir = base_dir
         self.drive = os.path.splitdrive(base_dir)[0]
+        local_appdata = os.environ.get("LOCALAPPDATA", base_dir)
+        self.app_data_dir = os.path.join(local_appdata, "DRB-OCR-AI")
+        self.crop_dir = os.path.join(self.app_data_dir, "Crop Image")
+        self.result_dir = os.path.join(self.app_data_dir, "DRB Metalcore Text Result")

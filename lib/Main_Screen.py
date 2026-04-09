@@ -755,7 +755,7 @@ class MainScreen(QMainWindow):
         self.label_batch.setText("0")
 
         # Read excel
-        df = pd.read_excel(rf"{self.drive}/DRB product text.xlsx")
+        df = pd.read_excel(self.product_excel_path)
         model_path = df.loc[
             df["Product name"] == self.current_product, "Model path"
         ].values
@@ -844,7 +844,7 @@ class MainScreen(QMainWindow):
 
     @catch_errors
     def on_update_product(self, checked=False):
-        df = pd.read_excel(rf"{self.drive}/DRB product text.xlsx")
+        df = pd.read_excel(self.product_excel_path)
         product_list = df["Product name"].tolist()
         self.combobox_product.clear()
         self.combobox_product.addItems(product_list)
@@ -954,7 +954,7 @@ class MainScreen(QMainWindow):
         # Xóa thư mục kết quả cũ (chạy trong background thread để không đóng băng UI)
         threading.Thread(
             target=delete_folder,
-            args=(rf"{self.drive}/DRB Metalcore Text Result", 6),
+            args=(self.result_dir, 6),
             daemon=True,
         ).start()
 
@@ -1150,8 +1150,18 @@ class MainScreen(QMainWindow):
             # Đi lên 1 cấp để tới MyApp
             base_dir = os.path.abspath(os.path.join(module_dir, ".."))
 
-        # Lấy ổ đĩa (C:\, D:\, E:\ ...)
+        self.base_dir = base_dir
         self.drive = os.path.splitdrive(base_dir)[0]
+        local_appdata = os.environ.get("LOCALAPPDATA", base_dir)
+        self.app_data_dir = os.path.join(local_appdata, "DRB-OCR-AI")
+        self.result_dir = os.path.join(self.app_data_dir, "DRB Metalcore Text Result")
+
+        # Ưu tiên file được đóng gói cùng app; fallback về vị trí cũ để tương thích ngược.
+        packaged_excel = os.path.join(self.base_dir, "DRB product text.xlsx")
+        legacy_excel = rf"{self.drive}/DRB product text.xlsx"
+        self.product_excel_path = (
+            packaged_excel if os.path.exists(packaged_excel) else legacy_excel
+        )
 
     @catch_errors
     def closeEvent(self, event):
