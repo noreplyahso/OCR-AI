@@ -366,7 +366,17 @@ jobs:
         shell: pwsh
         continue-on-error: false
         run: |
-          choco install innosetup --version=6.4.3 --no-progress -y
+          $isccCandidates = @(
+            "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $existingIscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+          if ($existingIscc) {
+            Write-Host "Using existing Inno Setup compiler at $existingIscc"
+          } else {
+            choco install innosetup --no-progress -y
+          }
 
       - name: Build Windows installer
         shell: pwsh
