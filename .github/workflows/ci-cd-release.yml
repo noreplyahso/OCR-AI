@@ -362,33 +362,74 @@ jobs:
           }
           Compress-Archive -Path $releaseDir -DestinationPath $zipPath -Force
 
-      - name: Install Inno Setup
+      - name: Resolve Inno Setup compiler
+        id: innosetup
         shell: pwsh
         continue-on-error: false
         run: |
-          $isccCandidates = @(
-            "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
-            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
-          )
-          $existingIscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          function Resolve-IsccPath {
+            $command = Get-Command iscc.exe -ErrorAction SilentlyContinue
+            if ($command) {
+              return $command.Source
+            }
 
-          if ($existingIscc) {
-            Write-Host "Using existing Inno Setup compiler at $existingIscc"
-          } else {
-            choco install innosetup --no-progress -y
+            $isccCandidates = @(
+              "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
+              "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+            )
+
+            foreach ($candidate in $isccCandidates) {
+              if (Test-Path $candidate) {
+                return $candidate
+              }
+            }
+
+            $registryKeys = @(
+              'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1',
+              'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1'
+            )
+
+            foreach ($key in $registryKeys) {
+              if (-not (Test-Path $key)) {
+                continue
+              }
+
+              $installLocation = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).InstallLocation
+              if (-not $installLocation) {
+                continue
+              }
+
+              $candidate = Join-Path $installLocation 'ISCC.exe'
+              if (Test-Path $candidate) {
+                return $candidate
+              }
+            }
+
+            return $null
           }
+
+          $iscc = Resolve-IsccPath
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y
+            $iscc = Resolve-IsccPath
+          }
+
+          if (-not $iscc) {
+            throw "ISCC.exe was not found after resolving Inno Setup."
+          }
+
+          $isccDir = Split-Path $iscc -Parent
+          $isccDir >> $env:GITHUB_PATH
+          "iscc_path=$iscc" >> $env:GITHUB_OUTPUT
+          Write-Host "Using Inno Setup compiler at $iscc"
 
       - name: Build Windows installer
         shell: pwsh
         continue-on-error: false
         run: |
-          $isccCandidates = @(
-            "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
-            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
-          )
-          $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          $iscc = '${{ steps.innosetup.outputs.iscc_path }}'
           if (-not $iscc) {
-            throw "ISCC.exe was not found after installing Inno Setup."
+            throw "ISCC.exe was not resolved before building the installer."
           }
 
           $releaseDir = Join-Path $env:BUILD_ROOT $env:APP_NAME
