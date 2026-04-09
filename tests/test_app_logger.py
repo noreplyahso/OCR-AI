@@ -13,9 +13,11 @@ import AppLogger  # noqa: E402
 
 
 def _safe_resolve(path_value):
+    if path_value is None:
+        return None
     try:
         return Path(path_value).resolve(strict=False)
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, RuntimeError, TypeError, ValueError):
         return None
 
 
