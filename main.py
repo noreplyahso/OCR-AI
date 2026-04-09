@@ -1,6 +1,7 @@
 import ctypes
 import os
 import sys
+import traceback
 
 
 if getattr(sys, "frozen", False):
@@ -100,6 +101,8 @@ try:
     from xml.dom import minidom
 except Exception:
     log_exception("Failed to import runtime dependencies during startup")
+    if should_run_smoke_test():
+        traceback.print_exc(file=sys.stderr)
     show_startup_error(
         "Phan mem khong the tai day du dependency khi khoi dong.\n"
         f"Vui long kiem tra log tai:\n{get_log_file_path()}"
@@ -119,6 +122,8 @@ try:
     from StackUI import StackedWidget
 except Exception:
     log_exception("Failed to import application modules during startup")
+    if should_run_smoke_test():
+        traceback.print_exc(file=sys.stderr)
     show_startup_error(
         "Phan mem khong the khoi dong.\n"
         f"Vui long kiem tra log tai:\n{get_log_file_path()}"
@@ -153,6 +158,8 @@ if __name__ == "__main__":
         sys.exit(exit_code)
     except Exception:
         log_exception("Fatal startup failure")
+        if should_run_smoke_test():
+            traceback.print_exc(file=sys.stderr)
         show_startup_error(
             "Phan mem gap loi khi khoi dong.\n"
             f"Vui long kiem tra log tai:\n{get_log_file_path()}"

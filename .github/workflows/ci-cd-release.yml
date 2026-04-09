@@ -282,6 +282,27 @@ jobs:
           $exePath = "$PWD\dist\DRB-OCR-AI\DRB-OCR-AI.exe"
           $stdoutPath = Join-Path $env:RUNNER_TEMP 'drb-smoke-test.stdout.log'
           $stderrPath = Join-Path $env:RUNNER_TEMP 'drb-smoke-test.stderr.log'
+          $appLogPath = Join-Path $env:LOCALAPPDATA 'DRB-OCR-AI\logs\app.log'
+          $crashLogPath = Join-Path $env:LOCALAPPDATA 'DRB-OCR-AI\logs\crash.log'
+
+          function Show-SmokeTestDiagnostics {
+            if (Test-Path $stdoutPath) {
+              Write-Host '=== Smoke test stdout ==='
+              Get-Content $stdoutPath
+            }
+            if (Test-Path $stderrPath) {
+              Write-Host '=== Smoke test stderr ==='
+              Get-Content $stderrPath
+            }
+            if (Test-Path $appLogPath) {
+              Write-Host '=== App log ==='
+              Get-Content $appLogPath
+            }
+            if (Test-Path $crashLogPath) {
+              Write-Host '=== Crash log ==='
+              Get-Content $crashLogPath
+            }
+          }
 
           if (Test-Path $stdoutPath) {
             Remove-Item $stdoutPath -Force
@@ -302,26 +323,12 @@ jobs:
               $process.Kill($true)
             } catch {
             }
-            if (Test-Path $stdoutPath) {
-              Write-Host '=== Smoke test stdout ==='
-              Get-Content $stdoutPath
-            }
-            if (Test-Path $stderrPath) {
-              Write-Host '=== Smoke test stderr ==='
-              Get-Content $stderrPath
-            }
+            Show-SmokeTestDiagnostics
             throw "Packaged executable smoke test timed out after 120 seconds"
           }
 
           if ($process.ExitCode -ne 0) {
-            if (Test-Path $stdoutPath) {
-              Write-Host '=== Smoke test stdout ==='
-              Get-Content $stdoutPath
-            }
-            if (Test-Path $stderrPath) {
-              Write-Host '=== Smoke test stderr ==='
-              Get-Content $stderrPath
-            }
+            Show-SmokeTestDiagnostics
             throw "Packaged executable smoke test failed with exit code $($process.ExitCode)"
           }
 
