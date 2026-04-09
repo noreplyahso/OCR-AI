@@ -144,9 +144,11 @@ jobs:
           }
 
           $name = "DRB-OCR-AI $tag"
+          $appVersion = $tag.TrimStart('v')
 
           "release_tag=$tag" >> $env:GITHUB_OUTPUT
           "release_name=$name" >> $env:GITHUB_OUTPUT
+          "app_version=$appVersion" >> $env:GITHUB_OUTPUT
           "prerelease=$prerelease" >> $env:GITHUB_OUTPUT
           "make_latest=$makeLatest" >> $env:GITHUB_OUTPUT
           "created_tag=$createdTag" >> $env:GITHUB_OUTPUT
@@ -265,16 +267,74 @@ jobs:
           $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
           Set-Content -Path $checksumPath -Value "$hash  $zipName" -NoNewline
 
-          "asset_path=$zipPath" >> $env:GITHUB_OUTPUT
-          "checksum_path=$checksumPath" >> $env:GITHUB_OUTPUT
+          "zip_path=$zipPath" >> $env:GITHUB_OUTPUT
+          "zip_checksum_path=$checksumPath" >> $env:GITHUB_OUTPUT
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          winget install --id JRSoftware.InnoSetup -e --silent --accept-package-agreements --accept-source-agreements
+
+          $candidates = @(
+            "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            throw "ISCC.exe not found after installing Inno Setup."
+          }
+
+          Write-Host "Using Inno Setup compiler at $iscc"
+
+      - name: Build installer with Inno Setup
+        id: installer
+        shell: pwsh
+        run: |
+          $releaseDir = Join-Path $PWD 'dist\DRB-OCR-AI'
+          $installerDir = Join-Path $PWD 'dist\installer'
+          New-Item -ItemType Directory -Path $installerDir -Force | Out-Null
+
+          $outputBase = "DRB-OCR-AI-${{ steps.meta.outputs.release_tag }}-setup-x64"
+          $candidates = @(
+            "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+          if (-not $iscc) {
+            throw "ISCC.exe not found."
+          }
+
+          & $iscc `
+            "/DAppVersion=${{ steps.meta.outputs.app_version }}" `
+            "/DSourceDir=$releaseDir" `
+            "/DRepoRoot=$PWD" `
+            "/DOutputDir=$installerDir" `
+            "/DOutputBaseFilename=$outputBase" `
+            "installer\DRB-OCR-AI.iss"
+
+          $installerPath = Join-Path $installerDir "$outputBase.exe"
+          if (-not (Test-Path $installerPath)) {
+            throw "Missing generated installer: $installerPath"
+          }
+
+          $installerChecksumPath = "$installerPath.sha256"
+          $hash = (Get-FileHash -Path $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path $installerChecksumPath -Value "$hash  $(Split-Path $installerPath -Leaf)" -NoNewline
+
+          "installer_path=$installerPath" >> $env:GITHUB_OUTPUT
+          "installer_checksum_path=$installerChecksumPath" >> $env:GITHUB_OUTPUT
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v6
         with:
           name: drb-ocr-ai-${{ steps.meta.outputs.release_tag }}-windows-x64
           path: |
-            ${{ steps.package.outputs.asset_path }}
-            ${{ steps.package.outputs.checksum_path }}
+            ${{ steps.package.outputs.zip_path }}
+            ${{ steps.package.outputs.zip_checksum_path }}
+            ${{ steps.installer.outputs.installer_path }}
+            ${{ steps.installer.outputs.installer_checksum_path }}
           if-no-files-found: error
 
       - name: Create or update GitHub Release
@@ -285,8 +345,10 @@ jobs:
           RELEASE_NAME: ${{ steps.meta.outputs.release_name }}
           PRERELEASE: ${{ steps.meta.outputs.prerelease }}
           MAKE_LATEST: ${{ steps.meta.outputs.make_latest }}
-          ASSET_PATH: ${{ steps.package.outputs.asset_path }}
-          CHECKSUM_PATH: ${{ steps.package.outputs.checksum_path }}
+          ZIP_PATH: ${{ steps.package.outputs.zip_path }}
+          ZIP_CHECKSUM_PATH: ${{ steps.package.outputs.zip_checksum_path }}
+          INSTALLER_PATH: ${{ steps.installer.outputs.installer_path }}
+          INSTALLER_CHECKSUM_PATH: ${{ steps.installer.outputs.installer_checksum_path }}
         run: |
           gh release view $env:RELEASE_TAG *> $null
           $releaseExists = $LASTEXITCODE -eq 0
@@ -307,12 +369,14 @@ jobs:
             }
 
             & gh @editArgs
-            gh release upload $env:RELEASE_TAG $env:ASSET_PATH $env:CHECKSUM_PATH --clobber
+            gh release upload $env:RELEASE_TAG $env:ZIP_PATH $env:ZIP_CHECKSUM_PATH $env:INSTALLER_PATH $env:INSTALLER_CHECKSUM_PATH --clobber
           } else {
             $createArgs = @(
               'release', 'create', $env:RELEASE_TAG,
-              $env:ASSET_PATH,
-              $env:CHECKSUM_PATH,
+              $env:ZIP_PATH,
+              $env:ZIP_CHECKSUM_PATH,
+              $env:INSTALLER_PATH,
+              $env:INSTALLER_CHECKSUM_PATH,
               '--title', $env:RELEASE_NAME,
               '--generate-notes',
               '--target', $env:GITHUB_SHA
