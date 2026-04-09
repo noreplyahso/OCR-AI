@@ -12,13 +12,21 @@ if str(LIB_DIR) not in sys.path:
 import AppLogger  # noqa: E402
 
 
+def _safe_resolve(path_value):
+    try:
+        return Path(path_value).resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
 def _reset_app_logger():
-    log_path = Path(AppLogger.get_log_file_path()).resolve()
+    log_path = _safe_resolve(AppLogger.get_log_file_path())
     root_logger = logging.getLogger()
 
     for handler in list(root_logger.handlers):
         base_filename = getattr(handler, "baseFilename", None)
-        if base_filename and Path(base_filename).resolve() == log_path:
+        handler_path = _safe_resolve(base_filename)
+        if log_path is not None and handler_path == log_path:
             handler.close()
             root_logger.removeHandler(handler)
 
