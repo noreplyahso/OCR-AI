@@ -50,7 +50,6 @@ env:
   PYTHON_VERSION: "3.9"
   PYTHONUTF8: "1"
   PIP_EXTRA_INDEX_URL: "https://download.pytorch.org/whl/cu117"
-  RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
   FAILURE_WEBHOOK_URL: ${{ secrets.FAILURE_WEBHOOK_URL }}
 
 concurrency:
@@ -483,7 +482,7 @@ jobs:
       name: staging
     timeout-minutes: 30
     env:
-      GH_TOKEN: ${{ env.RELEASE_TOKEN }}
+      GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
       VERIFY_ROOT: ${{ github.workspace }}\release-health\staging
 
     steps:
@@ -507,7 +506,7 @@ jobs:
         if: needs.resolve-release.outputs.deploy_mode == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          token: ${{ env.RELEASE_TOKEN }}
+          token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
           tag_name: ${{ needs.resolve-release.outputs.staging_tag }}
           name: ${{ needs.resolve-release.outputs.release_name }} - Staging
           prerelease: true
@@ -529,7 +528,7 @@ jobs:
         if: needs.resolve-release.outputs.deploy_mode == 'rollback'
         uses: softprops/action-gh-release@v2
         with:
-          token: ${{ env.RELEASE_TOKEN }}
+          token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
           tag_name: ${{ needs.resolve-release.outputs.staging_tag }}
           name: ${{ needs.resolve-release.outputs.release_name }} - Rollback Validation
           prerelease: true
@@ -613,7 +612,7 @@ jobs:
       name: production
     timeout-minutes: 30
     env:
-      GH_TOKEN: ${{ env.RELEASE_TOKEN }}
+      GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
       VERIFY_ROOT: ${{ github.workspace }}\release-health\production
 
     steps:
@@ -631,7 +630,7 @@ jobs:
         if: needs.resolve-release.outputs.deploy_mode == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          token: ${{ env.RELEASE_TOKEN }}
+          token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
           tag_name: ${{ needs.resolve-release.outputs.release_tag }}
           name: ${{ needs.resolve-release.outputs.release_name }}
           prerelease: false
