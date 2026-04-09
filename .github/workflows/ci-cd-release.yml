@@ -7,18 +7,17 @@ on:
   push:
     branches:
       - main
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: "Tag to create or update, for example v1.2.3"
-        required: true
-        type: string
-      release_name:
-        description: "Optional release title override"
+      bump_level:
+        description: "Version bump level for a manual run"
         required: false
-        type: string
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
       prerelease:
         description: "Mark the manual release as a prerelease"
         required: false
@@ -57,7 +56,7 @@ jobs:
 
   build-release:
     name: Build and publish release
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
     needs: ci
     runs-on: windows-latest
     timeout-minutes: 120
@@ -80,26 +79,84 @@ jobs:
         id: meta
         shell: pwsh
         run: |
+          git fetch --force --tags
+
+          $existingTagsForCommit = @(
+            git tag --points-at $env:GITHUB_SHA |
+              Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
+              Sort-Object {
+                $version = $_.Substring(1).Split('.')
+                [int]$version[0] * 1000000 + [int]$version[1] * 1000 + [int]$version[2]
+              }
+          )
+
           if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-            $tag = '${{ inputs.release_tag }}'
-            if ('${{ inputs.release_name }}' -ne '') {
-              $name = '${{ inputs.release_name }}'
-            } else {
-              $name = "DRB-OCR-AI $tag"
-            }
+            $bumpLevel = '${{ inputs.bump_level }}'
             $prerelease = '${{ inputs.prerelease }}'
             $makeLatest = '${{ inputs.make_latest }}'
           } else {
-            $tag = '${{ github.ref_name }}'
-            $name = "DRB-OCR-AI $tag"
+            $bumpLevel = 'patch'
             $prerelease = 'false'
             $makeLatest = 'true'
           }
+
+          if ($existingTagsForCommit.Count -gt 0) {
+            $tag = $existingTagsForCommit[-1]
+            $createdTag = 'false'
+          } else {
+            $allTags = @(
+              git tag --list 'v*' |
+                Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
+                Sort-Object {
+                  $version = $_.Substring(1).Split('.')
+                  [int]$version[0] * 1000000 + [int]$version[1] * 1000 + [int]$version[2]
+                }
+            )
+
+            if ($allTags.Count -eq 0) {
+              $major = 0
+              $minor = 1
+              $patch = 0
+            } else {
+              $latest = $allTags[-1].Substring(1).Split('.')
+              $major = [int]$latest[0]
+              $minor = [int]$latest[1]
+              $patch = [int]$latest[2]
+
+              switch ($bumpLevel) {
+                'major' {
+                  $major += 1
+                  $minor = 0
+                  $patch = 0
+                }
+                'minor' {
+                  $minor += 1
+                  $patch = 0
+                }
+                default {
+                  $patch += 1
+                }
+              }
+            }
+
+            $tag = "v$major.$minor.$patch"
+            $createdTag = 'true'
+          }
+
+          $name = "DRB-OCR-AI $tag"
 
           "release_tag=$tag" >> $env:GITHUB_OUTPUT
           "release_name=$name" >> $env:GITHUB_OUTPUT
           "prerelease=$prerelease" >> $env:GITHUB_OUTPUT
           "make_latest=$makeLatest" >> $env:GITHUB_OUTPUT
+          "created_tag=$createdTag" >> $env:GITHUB_OUTPUT
+
+      - name: Create and push release tag
+        if: steps.meta.outputs.created_tag == 'true'
+        shell: pwsh
+        run: |
+          git tag ${{ steps.meta.outputs.release_tag }} $env:GITHUB_SHA
+          git push origin ${{ steps.meta.outputs.release_tag }}
 
       - name: Install build dependencies
         shell: pwsh
