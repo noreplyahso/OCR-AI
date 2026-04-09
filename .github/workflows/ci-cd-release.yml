@@ -200,15 +200,6 @@ jobs:
             --exclude-module cupy `
             main.py
 
-      - name: Smoke test packaged executable
-        shell: pwsh
-        run: |
-          $env:DRB_OCR_AI_SMOKE_TEST = '1'
-          & "$PWD\dist\DRB-OCR-AI\DRB-OCR-AI.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "Packaged executable smoke test failed with exit code $LASTEXITCODE"
-          }
-
       - name: Copy runtime assets into distribution
         id: package
         shell: pwsh
@@ -283,6 +274,15 @@ jobs:
 
           "zip_path=$zipPath" >> $env:GITHUB_OUTPUT
           "zip_checksum_path=$checksumPath" >> $env:GITHUB_OUTPUT
+
+      - name: Smoke test packaged executable
+        shell: pwsh
+        run: |
+          $env:DRB_OCR_AI_SMOKE_TEST = '1'
+          & "$PWD\dist\DRB-OCR-AI\DRB-OCR-AI.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Packaged executable smoke test failed with exit code $LASTEXITCODE"
+          }
 
       - name: Resolve Inno Setup compiler
         id: innosetup
