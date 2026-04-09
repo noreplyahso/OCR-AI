@@ -1,54 +1,6 @@
-# ===== SAFE IMPORT ZONE for PyInstaller =====
-# Ensure PyInstaller collects the runtime dependencies used by the app.
-
-# --- Core system ---
-import os, sys, re, math, time, random, threading, multiprocessing, csv, shutil, datetime, pathlib, io, ast, yaml, ctypes, subprocess, psutil
-
-# --- Data & AI ---
-import numpy as np
-import pandas as pd
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.utils.data
-import torchvision
-from torchvision import datasets, transforms, models
-from sklearn.model_selection import train_test_split
-from torchinfo import summary
-from ultralytics import YOLO
-import tqdm
-
-# --- Communication / PLC / Database ---
-from pymodbus.client import ModbusTcpClient, ModbusSerialClient
-import pymodbus
-import pymcprotocol
-import pymysql
-from pymysql.err import MySQLError
-
-# --- Windows API (Single Instance) ---
-import win32event
-import win32api
-import winerror
-
-# --- Image / Vision ---
-import cv2
-import cvzone
-from cvzone.Utils import putTextRect
-from PIL import Image, ImageTk
-from pypylon import pylon
-
-# --- GUI (PyQt5 + PyQtGraph) ---
-from PyQt5 import QtCore, QtGui, QtWidgets, uic
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
-from PyQt5.QtWidgets import *
-import pyqtgraph as pg
-
-# --- XML / ETC ---
-import xml.etree.ElementTree as ET
-from xml.dom import minidom
-
-# ===== END SAFE IMPORT ZONE =====
+import ctypes
+import os
+import sys
 
 
 if getattr(sys, "frozen", False):
@@ -57,7 +9,8 @@ else:
     base_path = os.path.dirname(os.path.abspath(__file__))
 
 module_path = os.path.join(base_path, "lib")
-sys.path.append(module_path)
+if module_path not in sys.path:
+    sys.path.append(module_path)
 
 from AppLogger import get_log_file_path, log_exception, log_info, setup_logging
 
@@ -69,6 +22,80 @@ def show_startup_error(message):
         ctypes.windll.user32.MessageBoxW(0, message, "DRB-OCR-AI Error", 0x10)
     except Exception:
         pass
+
+
+# ===== SAFE IMPORT ZONE for PyInstaller =====
+# Keep these imports explicit so PyInstaller collects the required runtime modules.
+try:
+    # --- Core system ---
+    import ast
+    import csv
+    import datetime
+    import io
+    import math
+    import multiprocessing
+    import pathlib
+    import random
+    import re
+    import shutil
+    import subprocess
+    import threading
+    import time
+    import yaml
+    import psutil
+
+    # --- Data & AI ---
+    import numpy as np
+    import pandas as pd
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+    import torch.utils.data
+    import torchvision
+    from sklearn.model_selection import train_test_split
+    from torchinfo import summary
+    from torchvision import datasets, models, transforms
+    from ultralytics import YOLO
+    import tqdm
+
+    # --- Communication / PLC / Database ---
+    import pymcprotocol
+    import pymodbus
+    import pymysql
+    from pymodbus.client import ModbusSerialClient, ModbusTcpClient
+    from pymysql.err import MySQLError
+
+    # --- Windows API (Single Instance) ---
+    import win32api
+    import win32event
+    import winerror
+
+    # --- Image / Vision ---
+    import cv2
+    import cvzone
+    from cvzone.Utils import putTextRect
+    from PIL import Image, ImageTk
+    from pypylon import pylon
+
+    # --- GUI (PyQt5 + PyQtGraph) ---
+    import pyqtgraph as pg
+    from PyQt5 import QtCore, QtGui, QtWidgets, uic
+    from PyQt5.QtCore import *
+    from PyQt5.QtGui import *
+    from PyQt5.QtWidgets import *
+
+    # --- XML / ETC ---
+    import xml.etree.ElementTree as ET
+    from xml.dom import minidom
+except Exception:
+    log_exception("Failed to import runtime dependencies during startup")
+    show_startup_error(
+        "Phan mem khong the tai day du dependency khi khoi dong.\n"
+        f"Vui long kiem tra log tai:\n{get_log_file_path()}"
+    )
+    raise
+
+# ===== END SAFE IMPORT ZONE =====
 
 
 try:

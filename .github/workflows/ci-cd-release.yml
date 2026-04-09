@@ -186,6 +186,7 @@ jobs:
             --collect-submodules pypylon `
             --collect-submodules PIL `
             --hidden-import cProfile `
+            --hidden-import platform `
             --hidden-import importlib.resources `
             --hidden-import pyqtgraph `
             --exclude-module onnx `
@@ -194,6 +195,37 @@ jobs:
             --exclude-module tensorrt `
             --exclude-module cupy `
             main.py
+
+      - name: Verify packaged standard library modules
+        shell: pwsh
+        run: |
+          @'
+          import pathlib
+          import zipfile
+
+          base_library = pathlib.Path("dist/DRB-OCR-AI/_internal/base_library.zip")
+          if not base_library.exists():
+              raise SystemExit(f"Missing packaged stdlib archive: {base_library}")
+
+          required_modules = {
+              "platform.pyc",
+              "pathlib.pyc",
+              "threading.pyc",
+              "logging/__init__.pyc",
+          }
+
+          with zipfile.ZipFile(base_library) as archive:
+              names = set(archive.namelist())
+
+          missing_modules = sorted(required_modules - names)
+          if missing_modules:
+              raise SystemExit(
+                  "Missing stdlib modules in base_library.zip: "
+                  + ", ".join(missing_modules)
+              )
+
+          print("Verified packaged stdlib modules:", ", ".join(sorted(required_modules)))
+          '@ | python -
 
       - name: Copy runtime assets into distribution
         id: package
