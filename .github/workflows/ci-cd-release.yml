@@ -280,17 +280,48 @@ jobs:
         run: |
           $env:DRB_OCR_AI_SMOKE_TEST = '1'
           $exePath = "$PWD\dist\DRB-OCR-AI\DRB-OCR-AI.exe"
-          $process = Start-Process -FilePath $exePath -NoNewWindow -PassThru
+          $stdoutPath = Join-Path $env:RUNNER_TEMP 'drb-smoke-test.stdout.log'
+          $stderrPath = Join-Path $env:RUNNER_TEMP 'drb-smoke-test.stderr.log'
+
+          if (Test-Path $stdoutPath) {
+            Remove-Item $stdoutPath -Force
+          }
+          if (Test-Path $stderrPath) {
+            Remove-Item $stderrPath -Force
+          }
+
+          $process = Start-Process `
+            -FilePath $exePath `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath
 
           if (-not $process.WaitForExit(120000)) {
             try {
               $process.Kill($true)
             } catch {
             }
+            if (Test-Path $stdoutPath) {
+              Write-Host '=== Smoke test stdout ==='
+              Get-Content $stdoutPath
+            }
+            if (Test-Path $stderrPath) {
+              Write-Host '=== Smoke test stderr ==='
+              Get-Content $stderrPath
+            }
             throw "Packaged executable smoke test timed out after 120 seconds"
           }
 
           if ($process.ExitCode -ne 0) {
+            if (Test-Path $stdoutPath) {
+              Write-Host '=== Smoke test stdout ==='
+              Get-Content $stdoutPath
+            }
+            if (Test-Path $stderrPath) {
+              Write-Host '=== Smoke test stderr ==='
+              Get-Content $stderrPath
+            }
             throw "Packaged executable smoke test failed with exit code $($process.ExitCode)"
           }
 

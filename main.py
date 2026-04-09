@@ -17,7 +17,18 @@ from AppLogger import get_log_file_path, log_exception, log_info, setup_logging
 setup_logging()
 
 
+def should_run_smoke_test():
+    return os.environ.get("DRB_OCR_AI_SMOKE_TEST", "").strip() == "1"
+
+
 def show_startup_error(message):
+    if should_run_smoke_test():
+        try:
+            sys.stderr.write(message + "\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
+        return
     try:
         ctypes.windll.user32.MessageBoxW(0, message, "DRB-OCR-AI Error", 0x10)
     except Exception:
@@ -96,10 +107,6 @@ except Exception:
     raise
 
 # ===== END SAFE IMPORT ZONE =====
-
-
-def should_run_smoke_test():
-    return os.environ.get("DRB_OCR_AI_SMOKE_TEST", "").strip() == "1"
 
 
 if should_run_smoke_test():
