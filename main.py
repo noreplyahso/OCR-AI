@@ -1,5 +1,5 @@
 # ===== SAFE IMPORT ZONE for PyInstaller =====
-# Đảm bảo PyInstaller đóng gói đầy đủ dependencies, kể cả khi các module đã mã hoá thành .pyd
+# Ensure PyInstaller collects the runtime dependencies used by the app.
 
 # --- Core system ---
 import os, sys, re, math, time, random, threading, multiprocessing, csv, shutil, datetime, pathlib, io, ast, yaml, ctypes, subprocess, psutil
@@ -16,7 +16,7 @@ from torchvision import datasets, transforms, models
 from sklearn.model_selection import train_test_split
 from torchinfo import summary
 from ultralytics import YOLO
-import tqdm  # dùng cho thanh tiến trình
+import tqdm
 
 # --- Communication / PLC / Database ---
 from pymodbus.client import ModbusTcpClient, ModbusSerialClient
@@ -29,7 +29,6 @@ from pymysql.err import MySQLError
 import win32event
 import win32api
 import winerror
-
 
 # --- Image / Vision ---
 import cv2
@@ -52,35 +51,67 @@ from xml.dom import minidom
 # ===== END SAFE IMPORT ZONE =====
 
 
-# Lấy thư mục chứa file main.py hoặc main.exe
 if getattr(sys, "frozen", False):
-    # Đang chạy trong EXE (PyInstaller)
     base_path = os.path.dirname(sys.executable)
 else:
-    # Đang chạy Python bình thường
     base_path = os.path.dirname(os.path.abspath(__file__))
 
 module_path = os.path.join(base_path, "lib")
 sys.path.append(module_path)
-import StackUI
-from StackUI import StackedWidget
+
+from AppLogger import get_log_file_path, log_exception, log_info, setup_logging
+
+setup_logging()
+
+
+def show_startup_error(message):
+    try:
+        ctypes.windll.user32.MessageBoxW(0, message, "DRB-OCR-AI Error", 0x10)
+    except Exception:
+        pass
+
+
+try:
+    import StackUI
+    from StackUI import StackedWidget
+except Exception:
+    log_exception("Failed to import application modules during startup")
+    show_startup_error(
+        "Phan mem khong the khoi dong.\n"
+        f"Vui long kiem tra log tai:\n{get_log_file_path()}"
+    )
+    raise
 
 
 if __name__ == "__main__":
-    # QUAN TRỌNG: Phải có dòng này khi đóng EXE để tránh spawn vô hạn processes
-    multiprocessing.freeze_support()
+    try:
+        log_info(
+            "Application startup requested | executable=%s | base_path=%s | cwd=%s",
+            sys.executable if getattr(sys, "frozen", False) else __file__,
+            base_path,
+            os.getcwd(),
+        )
 
-    # Kiểm tra single instance bằng Mutex
-    # Tạo mutex với tên unique cho app này
-    mutex = win32event.CreateMutex(None, False, "Global\\AHSO_DRB_OCR_AI_Metalcore")
-    last_error = win32api.GetLastError()
+        multiprocessing.freeze_support()
 
-    if last_error == winerror.ERROR_ALREADY_EXISTS:
-        # Đã có instance đang chạy
-        sys.exit(0)
+        mutex = win32event.CreateMutex(None, False, "Global\\AHSO_DRB_OCR_AI_Metalcore")
+        last_error = win32api.GetLastError()
 
-    app = QtWidgets.QApplication(sys.argv)
-    window = StackedWidget()
-    window.setCurrentIndex(0)
-    window.showFullScreen()
-    sys.exit(app.exec_())
+        if last_error == winerror.ERROR_ALREADY_EXISTS:
+            log_info("Another application instance is already running")
+            sys.exit(0)
+
+        app = QtWidgets.QApplication(sys.argv)
+        window = StackedWidget()
+        window.setCurrentIndex(0)
+        window.showFullScreen()
+        exit_code = app.exec_()
+        log_info("Application exited normally | exit_code=%s", exit_code)
+        sys.exit(exit_code)
+    except Exception:
+        log_exception("Fatal startup failure")
+        show_startup_error(
+            "Phan mem gap loi khi khoi dong.\n"
+            f"Vui long kiem tra log tai:\n{get_log_file_path()}"
+        )
+        raise

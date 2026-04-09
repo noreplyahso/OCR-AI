@@ -29,9 +29,16 @@ from Global import (
     initialize_secure_dongle,
     catch_errors,
     check_dongle_and_log,
+    get_app_base_dir,
+    get_resource_path,
+    resolve_existing_path,
 )
+from AppLogger import log_info, log_warning
 
-sys.path.append(os.path.abspath("RunTime_Sofware"))
+runtime_dir = get_resource_path("RunTime_Sofware")
+if runtime_dir not in sys.path:
+    sys.path.append(runtime_dir)
+log_info("Configured OCR runtime path | runtime_dir=%s", runtime_dir)
 import Deep_Learning_Tool
 from Deep_Learning_Tool import OCR_DEEP_LEARNING
 
@@ -69,7 +76,9 @@ class ReferenceImage(QGraphicsScene):
         self.roi_rect_list = []
         self.single_OCR_text = []
         self.continuous_OCR_text = []
-        self.model_OCR = self.OCR_DEEP_LEARNING_TOOL.Load_Model_OCR("IS35R_100_E35.pt")
+        self.model_OCR = self.OCR_DEEP_LEARNING_TOOL.Load_Model_OCR(
+            self.resolve_model_path("IS35R_100_E35.pt")
+        )
         self.thread_OCR_detect = False
         self.new_pixmap = None
         self.result = True
@@ -279,7 +288,9 @@ class ReferenceImage(QGraphicsScene):
 
     @catch_errors
     def on_load_model(self):
-        self.model_OCR = self.OCR_DEEP_LEARNING_TOOL.Load_Model_OCR(self.GUI.model_path)
+        self.model_OCR = self.OCR_DEEP_LEARNING_TOOL.Load_Model_OCR(
+            self.resolve_model_path(self.GUI.model_path)
+        )
 
     @catch_errors
     def start_thread_OCR(self, status):
@@ -515,16 +526,31 @@ class ReferenceImage(QGraphicsScene):
         cv2.imwrite(save_path_2, image_arr)
 
     def current_drive(self):
-        # Thu muc chua file python hien tai
-        if getattr(sys, "frozen", False):
-            # Neu chay tu file exe
-            base_dir = os.path.dirname(sys.executable)
-        else:
-            # Neu chay tu file python
-            base_dir = os.path.dirname(os.path.abspath(__file__))
+        base_dir = get_app_base_dir()
         self.base_dir = base_dir
         self.drive = os.path.splitdrive(base_dir)[0]
         local_appdata = os.environ.get("LOCALAPPDATA", base_dir)
         self.app_data_dir = os.path.join(local_appdata, "DRB-OCR-AI")
         self.crop_dir = os.path.join(self.app_data_dir, "Crop Image")
         self.result_dir = os.path.join(self.app_data_dir, "DRB Metalcore Text Result")
+
+    def resolve_model_path(self, model_path):
+        if not model_path:
+            return model_path
+        normalized_model_path = os.path.normpath(str(model_path))
+        if os.path.isabs(normalized_model_path):
+            if os.path.exists(normalized_model_path):
+                return normalized_model_path
+            normalized_model_path = os.path.basename(normalized_model_path)
+        resolved_model_path = resolve_existing_path(
+            os.path.join(self.base_dir, normalized_model_path)
+            if hasattr(self, "base_dir")
+            else get_resource_path(normalized_model_path),
+            get_resource_path(normalized_model_path),
+            normalized_model_path,
+        )
+        if os.path.exists(resolved_model_path):
+            log_info("Resolved display OCR model path | requested=%s | resolved=%s", model_path, resolved_model_path)
+        else:
+            log_warning("Display OCR model path does not exist yet | requested=%s | resolved=%s", model_path, resolved_model_path)
+        return resolved_model_path

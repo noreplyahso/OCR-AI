@@ -1,5 +1,6 @@
 import pymysql
 from pymysql.err import MySQLError
+from AppLogger import log_exception
 
 class DatabaseConnection:
     """Quản lý kết nối MySQL với pymysql"""
@@ -15,7 +16,7 @@ class DatabaseConnection:
             )
             self.cursor = self.conn.cursor()
         except MySQLError as e:
-            print(f"Lỗi kết nối: {e}")
+            log_exception("Database connection failed")
             raise
 
     def execute(self, query, params=None):
@@ -23,7 +24,7 @@ class DatabaseConnection:
             self.cursor.execute(query, params or ())
             self.conn.commit()
         except MySQLError as e:
-            print(f"Lỗi SQL: {e}")
+            log_exception("Database query failed | query=%s", query)
             self.conn.rollback()
             raise
 

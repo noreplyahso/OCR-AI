@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.uic import loadUi
 from PyQt5.QtCore import Qt, pyqtSignal
 
-from Global import signal, OskEventFilter, CheckPasswordMessage
+from Global import signal, OskEventFilter, CheckPasswordMessage, get_resource_path
 from Database import DatabaseConnection, BaseModel, User
 db = DatabaseConnection()
 BaseModel.use_db(db)
@@ -17,7 +17,7 @@ class Authentication(QMainWindow):
         super().__init__(parent)
         
         self.current_user = user
-        loadUi("form_UI/Authentication.ui", self)
+        loadUi(get_resource_path("form_UI", "Authentication.ui"), self)
         self.setWindowTitle("Authentication — 21CFR Part 11")
         self.Btn_Add_User.clicked.connect(self.On_AddUser)
 

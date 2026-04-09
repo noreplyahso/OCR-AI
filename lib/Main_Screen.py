@@ -12,7 +12,16 @@ from PyQt5.QtWidgets import QMainWindow, QMessageBox, QFileDialog
 from PyQt5.QtCore import QTimer, QProcess, QTime, QDate, Qt, QPropertyAnimation, QSize
 from PyQt5.QtGui import QTransform
 
-from Global import signal, initialize_secure_dongle, catch_errors, delete_folder
+from Global import (
+    signal,
+    initialize_secure_dongle,
+    catch_errors,
+    delete_folder,
+    get_app_base_dir,
+    get_resource_path,
+    resolve_existing_path,
+)
+from AppLogger import log_error, log_exception, log_info, log_warning
 from Camera_Program import CameraController
 from Display import ReferenceImage
 from PLC import PLCController
@@ -26,7 +35,7 @@ from Authentication import Authentication
 class MainScreen(QMainWindow):
     def __init__(self):
         super().__init__()
-        loadUi("form_UI/screenMain.ui", self)
+        loadUi(get_resource_path("form_UI", "screenMain.ui"), self)
         self.camera_controller = CameraController()
         self.reference_image = ReferenceImage(GUI=self)
         self.PLC = PLCController()
@@ -110,7 +119,7 @@ class MainScreen(QMainWindow):
         self.batch = 0
         self.quantity = 0
         self.result = True
-        self.model_path = "IS35R_100_E35.pt"
+        self.model_path = get_resource_path("IS35R_100_E35.pt")
         self.ng_frame = 0
         self.button_stylesheet_off = """
                 QPushButton {
@@ -201,6 +210,7 @@ class MainScreen(QMainWindow):
         # Set cờ để ngăn recursive error handling
         self._in_error_handler = True
         try:
+            log_error("Main screen error shown | message=%s", error_message)
             if self.live_camera_status:
                 signal.live_camera.emit(False)
                 self.live_camera_status = False
@@ -211,9 +221,11 @@ class MainScreen(QMainWindow):
             msg_box.setText(error_message)
             msg_box.exec_()
         except Exception as e:
-            # Fallback: in ra console thay vì gọi lại signal
-            print(f"[CRITICAL] Error in error handler: {e}")
-            print(f"[CRITICAL] Original error: {error_message}")
+            # Fallback: ghi log thay vì gọi lại signal
+            log_exception(
+                "Failed to render main error dialog | original_error=%s",
+                error_message,
+            )
         finally:
             # Luôn reset cờ sau khi xong
             self._in_error_handler = False
@@ -570,10 +582,7 @@ class MainScreen(QMainWindow):
         self.on_manual_mode()
         if self.live_camera_status:
             self.on_live_camera()
-        if getattr(sys, "frozen", False):
-            base_dir = os.path.dirname(sys.executable)
-        else:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
+        base_dir = get_app_base_dir()
         exe_path = os.path.join(
             base_dir, "OCR_DeepLearning_Software", "OCR_DeepLearning_Software.exe"
         )
@@ -764,7 +773,7 @@ class MainScreen(QMainWindow):
         if pd.isna(model_path[0]):
             signal.show_error_message_main.emit("Product has no Model AI!")
             return
-        self.model_path = model_path[0]
+        self.model_path = self.resolve_model_path(model_path[0])
         signal.load_model.emit()
 
         # end_time = time.time()
@@ -1119,6 +1128,27 @@ class MainScreen(QMainWindow):
         transform.scale(zoom_factor, zoom_factor)
         self.graphics_view_reference.setTransform(transform)
 
+    def resolve_model_path(self, model_path):
+        if not model_path:
+            return model_path
+        normalized_model_path = os.path.normpath(str(model_path))
+        if os.path.isabs(normalized_model_path):
+            if os.path.exists(normalized_model_path):
+                return normalized_model_path
+            normalized_model_path = os.path.basename(normalized_model_path)
+        resolved_model_path = resolve_existing_path(
+            os.path.join(self.base_dir, normalized_model_path)
+            if hasattr(self, "base_dir")
+            else get_resource_path(normalized_model_path),
+            get_resource_path(normalized_model_path),
+            normalized_model_path,
+        )
+        if os.path.exists(resolved_model_path):
+            log_info("Resolved OCR model path | requested=%s | resolved=%s", model_path, resolved_model_path)
+        else:
+            log_warning("OCR model path does not exist yet | requested=%s | resolved=%s", model_path, resolved_model_path)
+        return resolved_model_path
+
     @catch_errors
     def start_clock(self):
         # Tạo QTimer để cập nhật mỗi giây
@@ -1138,29 +1168,24 @@ class MainScreen(QMainWindow):
         self.label_clock.setText(now)
 
     def current_drive(self):
-        # Thu muc chua file python hien tai
-        if getattr(sys, "frozen", False):
-            # Neu chay tu file exe
-            # sys.executable = D:\MyApp\main.exe
-            base_dir = os.path.dirname(sys.executable)
-        else:
-            # Neu chay tu file python
-            # sys.modules[__name__].__file__ = D:\MyApp\lib\Main_Screen.py
-            module_dir = os.path.dirname(sys.modules[__name__].__file__)
-            # Đi lên 1 cấp để tới MyApp
-            base_dir = os.path.abspath(os.path.join(module_dir, ".."))
-
+        base_dir = get_app_base_dir()
         self.base_dir = base_dir
         self.drive = os.path.splitdrive(base_dir)[0]
         local_appdata = os.environ.get("LOCALAPPDATA", base_dir)
         self.app_data_dir = os.path.join(local_appdata, "DRB-OCR-AI")
         self.result_dir = os.path.join(self.app_data_dir, "DRB Metalcore Text Result")
 
-        # Ưu tiên file được đóng gói cùng app; fallback về vị trí cũ để tương thích ngược.
         packaged_excel = os.path.join(self.base_dir, "DRB product text.xlsx")
         legacy_excel = rf"{self.drive}/DRB product text.xlsx"
         self.product_excel_path = (
             packaged_excel if os.path.exists(packaged_excel) else legacy_excel
+        )
+        log_info(
+            "Resolved application paths | base_dir=%s | app_data_dir=%s | result_dir=%s | product_excel=%s",
+            self.base_dir,
+            self.app_data_dir,
+            self.result_dir,
+            self.product_excel_path,
         )
 
     @catch_errors

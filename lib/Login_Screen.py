@@ -5,7 +5,8 @@ from PyQt5.uic import loadUi
 from PyQt5.QtWidgets import QMainWindow, QMessageBox, QLineEdit
 from PyQt5.QtCore import QTimer, QProcess, QTime, QDate
 
-from Global import signal, OskEventFilter, CheckPasswordMessage
+from Global import signal, OskEventFilter, CheckPasswordMessage, get_resource_path
+from AppLogger import log_error, log_exception
 from Database import DatabaseConnection, BaseModel, User, CurrentSession
 db = DatabaseConnection()
 BaseModel.use_db(db)
@@ -14,7 +15,7 @@ class LoginScreen(QMainWindow):
     def __init__(self):
         super().__init__()
         # self.current_drive()
-        loadUi("form_UI/screenLogin.ui", self)
+        loadUi(get_resource_path("form_UI", "screenLogin.ui"), self)
         self.set_event()
         self.set_state()
     
@@ -34,6 +35,7 @@ class LoginScreen(QMainWindow):
     # signal=====================================================================
     def on_show_error_message(self, error_message):
         try:
+            log_error("Login screen error shown | message=%s", error_message)
             QMessageBox.critical(self, "Error", error_message )
             # msg_box = QMessageBox()
             # msg_box.setIcon(QMessageBox.Icon.Critical)
@@ -41,6 +43,7 @@ class LoginScreen(QMainWindow):
             # msg_box.setText(error_message)
             # msg_box.exec_()
         except Exception as e:
+            log_exception("Failed to render login error dialog")
             signal.show_error_message_login.emit(str(e))
             
     # UI=========================================================================

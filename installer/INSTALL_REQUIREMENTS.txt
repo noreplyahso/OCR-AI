@@ -7,4 +7,6 @@ Before using it on a production machine, verify these prerequisites:
 3. MySQL must be available if the app still uses the local drb_text database configuration.
 4. Product Excel data and runtime models must remain inside the installed application folder.
 
-If the application does not start correctly, run the installed EXE and capture the first error message shown on screen.
+If the application does not start correctly, check these logs first:
+- %LOCALAPPDATA%\DRB-OCR-AI\logs\app.log
+- %LOCALAPPDATA%\DRB-OCR-AI\logs\crash.log

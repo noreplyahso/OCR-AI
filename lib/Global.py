@@ -63,7 +63,27 @@ class GlobalVariables:
 global_vars = GlobalVariables()
 
 # ========================================================================================
-import subprocess, os, psutil
+import subprocess, os, psutil, sys
+from AppLogger import log_error, log_exception, log_info, log_warning, setup_logging
+
+setup_logging()
+
+
+def get_app_base_dir():
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+
+def get_resource_path(*parts):
+    return os.path.join(get_app_base_dir(), *parts)
+
+
+def resolve_existing_path(*candidates):
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return candidates[0] if candidates else ""
 
 from PyQt5.QtWidgets import (
     QApplication,
@@ -117,8 +137,8 @@ class OskEventFilter(QObject):
 
                     # Mở mới lại osk.exe
                     subprocess.Popen(["explorer.exe", shortcut_path])
-                except Exception as e:
-                    print("Lỗi mở bàn phím ảo:", e)
+                except Exception:
+                    log_exception("Failed to open on-screen keyboard shortcut")
 
         return super().eventFilter(obj, event)
 
@@ -154,7 +174,12 @@ from ctypes import c_int, byref
 SD_FIND = 1
 current_file_path = os.path.dirname(os.path.abspath(__file__))
 path = os.path.join(current_file_path, "System8.dll")
-hinst = ctypes.windll.LoadLibrary(path)
+try:
+    hinst = ctypes.windll.LoadLibrary(path)
+    log_info("Secure dongle library loaded | path=%s", path)
+except Exception:
+    log_exception("Failed to load secure dongle library | path=%s", path)
+    raise
 SecureDongle = hinst.SecureDongle
 
 _dongle_log = {"ok_count": 0}
@@ -182,6 +207,9 @@ def _write_dongle_log(retcode, force=False):
             f.write(log_line)
     except:
         pass  # Bỏ qua lỗi ghi file
+
+    if retcode != 0:
+        log_warning("Secure dongle check failed | retcode=%s", retcode)
 
 
 def check_dongle_and_log():
@@ -273,19 +301,30 @@ def catch_errors(func):
         except Exception as e:
             # Lấy tên hàm trực tiếp từ object → Cython vẫn giữ
             func_name = func.__name__
+            log_exception(
+                "Unhandled exception in %s.%s",
+                self.__class__.__name__,
+                func_name,
+            )
 
             # Bảo vệ chống infinite loop: không emit nếu đang xử lý lỗi
             if not getattr(self, "_in_error_handler", False):
                 try:
                     signal.show_error_message_main.emit(f"[{func_name}] {e}")
                 except:
-                    # Nếu emit signal cũng lỗi → in ra console
-                    print(
-                        f"[CRITICAL] Failed to emit error signal for [{func_name}]: {e}"
+                    # Nếu emit signal cũng lỗi → ghi log fallback
+                    log_error(
+                        "Failed to emit error signal | function=%s | error=%s",
+                        func_name,
+                        e,
                     )
             else:
-                # Đang trong error handler → chỉ in ra console
-                print(f"[ERROR in error handler] [{func_name}] {e}")
+                # Đang trong error handler → chỉ ghi log
+                log_error(
+                    "Exception raised inside error handler | function=%s | error=%s",
+                    func_name,
+                    e,
+                )
 
     return wrapper
 
