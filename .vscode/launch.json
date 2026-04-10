@@ -1,0 +1,79 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "DRB V2 Headless",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/DRB-OCR-AI-V2/src/drb_inspection/app/bootstrap.py",
+            "cwd": "${workspaceFolder}/DRB-OCR-AI-V2",
+            "envFile": "${workspaceFolder}/DRB-OCR-AI-V2/.env.v2",
+            "env": {
+                "DRB_V2_ENV_FILE": "${workspaceFolder}/DRB-OCR-AI-V2/.env.v2",
+                "DRB_V2_HEADLESS": "1"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "DRB V2 Qt Desktop",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/DRB-OCR-AI-V2/src/drb_inspection/app/bootstrap.py",
+            "cwd": "${workspaceFolder}/DRB-OCR-AI-V2",
+            "envFile": "${workspaceFolder}/DRB-OCR-AI-V2/.env.v2",
+            "env": {
+                "DRB_V2_ENV_FILE": "${workspaceFolder}/DRB-OCR-AI-V2/.env.v2",
+                "DRB_V2_HEADLESS": "0",
+                "DRB_V2_QT_OFFSCREEN": "0",
+                "DRB_V2_QT_NO_EXEC": "0"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "DRB V2 Qt Offscreen Smoke",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/DRB-OCR-AI-V2/src/drb_inspection/app/bootstrap.py",
+            "cwd": "${workspaceFolder}/DRB-OCR-AI-V2",
+            "envFile": "${workspaceFolder}/DRB-OCR-AI-V2/.env.v2",
+            "env": {
+                "DRB_V2_ENV_FILE": "${workspaceFolder}/DRB-OCR-AI-V2/.env.v2",
+                "DRB_V2_HEADLESS": "0",
+                "DRB_V2_QT_OFFSCREEN": "1",
+                "DRB_V2_QT_NO_EXEC": "1"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "DRB V2 Tests Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/DRB-OCR-AI-V2/.env.v2",
+            "args": [
+                "${file}",
+                "-q"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "DRB V2 Tests All",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/DRB-OCR-AI-V2/.env.v2",
+            "args": [
+                "DRB-OCR-AI-V2/tests",
+                "-q"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}

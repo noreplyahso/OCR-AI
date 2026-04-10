@@ -1,3 +1,12 @@
 {
-    "python-envs.defaultEnvManager": "ms-python.python:system"
+    "python-envs.defaultEnvManager": "ms-python.python:system",
+    "python.envFile": "${workspaceFolder}/DRB-OCR-AI-V2/.env.v2",
+    "python.testing.pytestEnabled": true,
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestArgs": [
+        "DRB-OCR-AI-V2/tests"
+    ],
+    "python.analysis.extraPaths": [
+        "./DRB-OCR-AI-V2/src"
+    ]
 }

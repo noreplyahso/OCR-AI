@@ -1,0 +1,41 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "DRB V2 Install Dev",
+            "type": "shell",
+            "command": "python -m pip install -e .[dev]",
+            "options": {
+                "cwd": "${workspaceFolder}/DRB-OCR-AI-V2"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "DRB V2 Tests All",
+            "type": "shell",
+            "command": "python -m pytest tests -q",
+            "options": {
+                "cwd": "${workspaceFolder}/DRB-OCR-AI-V2",
+                "env": {
+                    "PYTHONPATH": "${workspaceFolder}/DRB-OCR-AI-V2/src",
+                    "DRB_V2_DEMO_MODE": "1"
+                }
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "DRB V2 Headless Run",
+            "type": "shell",
+            "command": "python src/drb_inspection/app/bootstrap.py",
+            "options": {
+                "cwd": "${workspaceFolder}/DRB-OCR-AI-V2",
+                "env": {
+                    "PYTHONPATH": "${workspaceFolder}/DRB-OCR-AI-V2/src",
+                    "DRB_V2_HEADLESS": "1",
+                    "DRB_V2_DEMO_MODE": "1"
+                }
+            },
+            "problemMatcher": []
+        }
+    ]
+}

@@ -1,0 +1,21 @@
+name: sample-ocr-segment-recipe
+version: 1
+steps:
+  - id: locate_label
+    plugin: ocr
+    task_type: ocr
+    required: true
+    roi: label_roi
+    parameters:
+      rotate: clockwise_90
+      expected_text: PRODUCT-A
+      detected_text: PRODUCT-A
+  - id: inspect_surface
+    plugin: segment
+    task_type: segment
+    required: false
+    roi: surface_roi
+    parameters:
+      mask_threshold: 0.5
+decision:
+  mode: all_required_pass
