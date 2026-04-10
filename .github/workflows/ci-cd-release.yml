@@ -13,7 +13,8 @@
 #
 # Deployment model:
 #   Rolling promotion with immutable artifacts.
-#   The workflow validates the exact build on staging first, then promotes the same ZIP and installer to production.
+#   The workflow validates the exact build on staging first, then promotes the same installer to production.
+#   The portable ZIP remains an internal Actions artifact for QA and debugging, not a public release asset.
 #   The previous stable release remains available until the production health check succeeds.
 #
 # Manual rollback strategy:
@@ -452,13 +453,20 @@ jobs:
             ${{ runner.temp }}\drb-ocr-ai\logs
           if-no-files-found: warn
 
-      - name: Upload release artifacts
+      - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-assets-${{ needs.resolve-release.outputs.release_tag }}
+          name: release-installer-${{ needs.resolve-release.outputs.release_tag }}
+          path: |
+            dist\release\${{ steps.names.outputs.installer_name }}
+          if-no-files-found: error
+
+      - name: Upload portable archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-zip-${{ needs.resolve-release.outputs.release_tag }}
           path: |
             dist\release\${{ steps.names.outputs.zip_name }}
-            dist\release\${{ steps.names.outputs.installer_name }}
           if-no-files-found: error
 
       - name: Notify failure
@@ -490,11 +498,11 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Download build artifacts
+      - name: Download installer artifact
         if: needs.resolve-release.outputs.deploy_mode == 'release'
         uses: actions/download-artifact@v4
         with:
-          name: release-assets-${{ needs.resolve-release.outputs.release_tag }}
+          name: release-installer-${{ needs.resolve-release.outputs.release_tag }}
           path: release-assets
 
       - name: Verify GitHub CLI
@@ -509,9 +517,9 @@ jobs:
         continue-on-error: false
         run: |
           New-Item -ItemType Directory -Path release-assets -Force | Out-Null
-          gh release download '${{ needs.resolve-release.outputs.release_tag }}' --pattern '*.zip' --pattern '*.exe' --dir release-assets --clobber
+          gh release download '${{ needs.resolve-release.outputs.release_tag }}' --pattern '*.exe' --dir release-assets --clobber
 
-      - name: Prepare publishable staging assets
+      - name: Prepare publishable staging installer
         shell: pwsh
         continue-on-error: false
         run: |
@@ -528,9 +536,9 @@ jobs:
           }
           New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
 
-          $sourceFiles = Get-ChildItem -Path $sourceDir -File | Where-Object { $_.Extension -in '.zip', '.exe' }
+          $sourceFiles = Get-ChildItem -Path $sourceDir -File | Where-Object { $_.Extension -eq '.exe' }
           if (-not $sourceFiles) {
-            throw "No release assets were found in $sourceDir."
+            throw "No installer asset was found in $sourceDir."
           }
 
           foreach ($file in $sourceFiles) {
@@ -541,12 +549,12 @@ jobs:
             }
 
             Copy-Item $file.FullName -Destination (Join-Path $publishDir $file.Name) -Force
-            Write-Host "Prepared $($file.Name) ($sizeMb MB) for GitHub Release upload."
+            Write-Host "Prepared installer $($file.Name) ($sizeMb MB) for GitHub Release upload."
           }
 
           $publishFiles = Get-ChildItem -Path $publishDir -File
           if (-not $publishFiles) {
-            throw "No publishable release assets remain after applying the GitHub Release 2 GiB asset limit."
+            throw "No publishable installer remains after applying the GitHub Release 2 GiB asset limit."
           }
 
       - name: Publish staging prerelease
@@ -560,7 +568,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
           files: |
-            release-publish/*
+            release-publish/*.exe
 
       - name: Re-publish rollback candidate to staging
         if: needs.resolve-release.outputs.deploy_mode == 'rollback'
@@ -572,7 +580,7 @@ jobs:
           prerelease: true
           generate_release_notes: false
           files: |
-            release-publish/*
+            release-publish/*.exe
 
       - name: Run post-deploy staging health check
         shell: pwsh
@@ -581,52 +589,34 @@ jobs:
           DRB_OCR_AI_SMOKE_TEST: "1"
         run: |
           New-Item -ItemType Directory -Path $env:VERIFY_ROOT -Force | Out-Null
-          $assetDir = Join-Path $env:GITHUB_WORKSPACE 'release-assets'
-          if (-not (Test-Path $assetDir)) {
-            New-Item -ItemType Directory -Path $assetDir -Force | Out-Null
+          $downloadDir = Join-Path $env:VERIFY_ROOT 'release-download'
+          New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+          gh release download '${{ needs.resolve-release.outputs.staging_tag }}' --pattern '*.exe' --dir $downloadDir --clobber
+
+          $installerPath = Get-ChildItem -Path $downloadDir -File -Filter '*.exe' | Select-Object -First 1
+          if (-not $installerPath) {
+            throw "No staging installer artifact was downloaded."
           }
 
-          $localAssets = @(Get-ChildItem -Path $assetDir -File -Filter '*.zip' -ErrorAction SilentlyContinue)
-          $localAssets += @(Get-ChildItem -Path $assetDir -File -Filter '*.exe' -ErrorAction SilentlyContinue)
-          if (-not $localAssets) {
-            gh release download '${{ needs.resolve-release.outputs.staging_tag }}' --pattern '*.zip' --pattern '*.exe' --dir $assetDir --clobber
+          $installRoot = Join-Path $env:VERIFY_ROOT 'installed'
+          if (Test-Path $installRoot) {
+            Remove-Item $installRoot -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
+
+          $installerProcess = Start-Process `
+            -FilePath $installerPath.FullName `
+            -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$installRoot") `
+            -Wait `
+            -PassThru
+
+          if ($installerProcess.ExitCode -ne 0) {
+            throw "Staging installer validation failed with exit code $($installerProcess.ExitCode)."
           }
 
-          $zipPath = Get-ChildItem -Path $assetDir -File -Filter '*.zip' | Select-Object -First 1
-          if ($zipPath) {
-            $portableRoot = Join-Path $env:VERIFY_ROOT 'portable'
-            Expand-Archive -Path $zipPath.FullName -DestinationPath $portableRoot -Force
-
-            $appExe = Get-ChildItem -Path $portableRoot -Recurse -Filter "$env:APP_NAME.exe" | Select-Object -First 1
-            if (-not $appExe) {
-              throw "Packaged executable was not found in the staging ZIP artifact."
-            }
-          } else {
-            $installerPath = Get-ChildItem -Path $assetDir -File -Filter '*.exe' | Select-Object -First 1
-            if (-not $installerPath) {
-              throw "No staging ZIP or installer artifact is available for validation."
-            }
-
-            $installRoot = Join-Path $env:VERIFY_ROOT 'installed'
-            if (Test-Path $installRoot) {
-              Remove-Item $installRoot -Recurse -Force
-            }
-            New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
-
-            $installerProcess = Start-Process `
-              -FilePath $installerPath.FullName `
-              -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$installRoot") `
-              -Wait `
-              -PassThru
-
-            if ($installerProcess.ExitCode -ne 0) {
-              throw "Staging installer validation failed with exit code $($installerProcess.ExitCode)."
-            }
-
-            $appExe = Get-ChildItem -Path $installRoot -Recurse -Filter "$env:APP_NAME.exe" | Select-Object -First 1
-            if (-not $appExe) {
-              throw "Installed executable was not found after staging installer validation."
-            }
+          $appExe = Get-ChildItem -Path $installRoot -Recurse -Filter "$env:APP_NAME.exe" | Select-Object -First 1
+          if (-not $appExe) {
+            throw "Installed executable was not found after staging installer validation."
           }
 
           $stdoutPath = Join-Path $env:VERIFY_ROOT 'staging-smoke.stdout.log'
@@ -689,14 +679,14 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Download build artifacts
+      - name: Download installer artifact
         if: needs.resolve-release.outputs.deploy_mode == 'release'
         uses: actions/download-artifact@v4
         with:
-          name: release-assets-${{ needs.resolve-release.outputs.release_tag }}
+          name: release-installer-${{ needs.resolve-release.outputs.release_tag }}
           path: release-assets
 
-      - name: Prepare publishable production assets
+      - name: Prepare publishable production installer
         if: needs.resolve-release.outputs.deploy_mode == 'release'
         shell: pwsh
         continue-on-error: false
@@ -714,9 +704,9 @@ jobs:
           }
           New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
 
-          $sourceFiles = Get-ChildItem -Path $sourceDir -File | Where-Object { $_.Extension -in '.zip', '.exe' }
+          $sourceFiles = Get-ChildItem -Path $sourceDir -File | Where-Object { $_.Extension -eq '.exe' }
           if (-not $sourceFiles) {
-            throw "No release assets were found in $sourceDir."
+            throw "No installer asset was found in $sourceDir."
           }
 
           foreach ($file in $sourceFiles) {
@@ -727,12 +717,12 @@ jobs:
             }
 
             Copy-Item $file.FullName -Destination (Join-Path $publishDir $file.Name) -Force
-            Write-Host "Prepared $($file.Name) ($sizeMb MB) for GitHub Release upload."
+            Write-Host "Prepared installer $($file.Name) ($sizeMb MB) for GitHub Release upload."
           }
 
           $publishFiles = Get-ChildItem -Path $publishDir -File
           if (-not $publishFiles) {
-            throw "No publishable release assets remain after applying the GitHub Release 2 GiB asset limit."
+            throw "No publishable installer remains after applying the GitHub Release 2 GiB asset limit."
           }
 
       - name: Promote release to production
@@ -747,7 +737,7 @@ jobs:
           generate_release_notes: true
           make_latest: true
           files: |
-            release-publish/*
+            release-publish/*.exe
 
       - name: Re-promote rollback tag as latest
         if: needs.resolve-release.outputs.deploy_mode == 'rollback'
@@ -763,52 +753,34 @@ jobs:
           DRB_OCR_AI_SMOKE_TEST: "1"
         run: |
           New-Item -ItemType Directory -Path $env:VERIFY_ROOT -Force | Out-Null
-          $assetDir = Join-Path $env:GITHUB_WORKSPACE 'release-assets'
-          if (-not (Test-Path $assetDir)) {
-            New-Item -ItemType Directory -Path $assetDir -Force | Out-Null
+          $downloadDir = Join-Path $env:VERIFY_ROOT 'release-download'
+          New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+          gh release download '${{ needs.resolve-release.outputs.release_tag }}' --pattern '*.exe' --dir $downloadDir --clobber
+
+          $installerPath = Get-ChildItem -Path $downloadDir -File -Filter '*.exe' | Select-Object -First 1
+          if (-not $installerPath) {
+            throw "No production installer artifact was downloaded."
           }
 
-          $localAssets = @(Get-ChildItem -Path $assetDir -File -Filter '*.zip' -ErrorAction SilentlyContinue)
-          $localAssets += @(Get-ChildItem -Path $assetDir -File -Filter '*.exe' -ErrorAction SilentlyContinue)
-          if (-not $localAssets) {
-            gh release download '${{ needs.resolve-release.outputs.release_tag }}' --pattern '*.zip' --pattern '*.exe' --dir $assetDir --clobber
+          $installRoot = Join-Path $env:VERIFY_ROOT 'installed'
+          if (Test-Path $installRoot) {
+            Remove-Item $installRoot -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
+
+          $installerProcess = Start-Process `
+            -FilePath $installerPath.FullName `
+            -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$installRoot") `
+            -Wait `
+            -PassThru
+
+          if ($installerProcess.ExitCode -ne 0) {
+            throw "Production installer validation failed with exit code $($installerProcess.ExitCode)."
           }
 
-          $zipPath = Get-ChildItem -Path $assetDir -File -Filter '*.zip' | Select-Object -First 1
-          if ($zipPath) {
-            $portableRoot = Join-Path $env:VERIFY_ROOT 'portable'
-            Expand-Archive -Path $zipPath.FullName -DestinationPath $portableRoot -Force
-
-            $appExe = Get-ChildItem -Path $portableRoot -Recurse -Filter "$env:APP_NAME.exe" | Select-Object -First 1
-            if (-not $appExe) {
-              throw "Packaged executable was not found in the production ZIP artifact."
-            }
-          } else {
-            $installerPath = Get-ChildItem -Path $assetDir -File -Filter '*.exe' | Select-Object -First 1
-            if (-not $installerPath) {
-              throw "No production ZIP or installer artifact is available for validation."
-            }
-
-            $installRoot = Join-Path $env:VERIFY_ROOT 'installed'
-            if (Test-Path $installRoot) {
-              Remove-Item $installRoot -Recurse -Force
-            }
-            New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
-
-            $installerProcess = Start-Process `
-              -FilePath $installerPath.FullName `
-              -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$installRoot") `
-              -Wait `
-              -PassThru
-
-            if ($installerProcess.ExitCode -ne 0) {
-              throw "Production installer validation failed with exit code $($installerProcess.ExitCode)."
-            }
-
-            $appExe = Get-ChildItem -Path $installRoot -Recurse -Filter "$env:APP_NAME.exe" | Select-Object -First 1
-            if (-not $appExe) {
-              throw "Installed executable was not found after production installer validation."
-            }
+          $appExe = Get-ChildItem -Path $installRoot -Recurse -Filter "$env:APP_NAME.exe" | Select-Object -First 1
+          if (-not $appExe) {
+            throw "Installed executable was not found after production installer validation."
           }
 
           $stdoutPath = Join-Path $env:VERIFY_ROOT 'production-smoke.stdout.log'
