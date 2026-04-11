@@ -72,6 +72,7 @@ class RunCurrentProductCycleUseCase:
         cycle.trigger_source = trigger_source
         cycle.signal_summary = signal_summary
         should_record = self.runtime_settings.record_results_default if record_results is None else bool(record_results)
+        should_record = should_record and self._should_record_artifacts(cycle)
         if should_record and self.artifact_recorder is not None:
             cycle.artifacts = self.artifact_recorder.record_cycle(
                 product_name=product.product_name,
@@ -136,3 +137,16 @@ class RunCurrentProductCycleUseCase:
             return counted
         text = str(task_result.outputs.get("text", "")).strip()
         return bool(text)
+
+    def _should_record_artifacts(self, cycle: InspectionCycleResult) -> bool:
+        has_ocr_tasks = any(
+            task_result.task_type.value == "ocr"
+            for task_result in cycle.inspection.task_results
+        )
+        if not has_ocr_tasks:
+            return bool(cycle.inspection.task_results)
+        return any(
+            self._task_counted_for_history(task_result)
+            for task_result in cycle.inspection.task_results
+            if task_result.task_type.value == "ocr"
+        )

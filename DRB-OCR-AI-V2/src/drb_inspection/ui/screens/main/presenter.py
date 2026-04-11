@@ -362,6 +362,8 @@ class MainScreenPresenter:
             reason = str(task_result.outputs.get("reason", "")).strip()
             source = str(task_result.outputs.get("source", "")).strip()
             warning = str(task_result.outputs.get("warning", "")).strip()
+            raw_text = self._summarize_runtime_text(task_result.outputs.get("raw_text"))
+            text_was_normalized = bool(task_result.outputs.get("text_was_normalized"))
             details = f"{task_result.task_id}: {task_result.status.value.upper()}"
             if text:
                 details += f" | text={text}"
@@ -377,6 +379,9 @@ class MainScreenPresenter:
                 details += f" | source={source}"
             if warning:
                 details += f" | warning={warning}"
+            if text_was_normalized:
+                details += f" | normalized=yes"
+                details += f" | raw_text={raw_text}"
             if task_result.message:
                 details += f" | {task_result.message}"
             summaries.append(details)
@@ -399,6 +404,8 @@ class MainScreenPresenter:
                         f"variant={self._diagnostic_value(outputs.get('matched_variant'))}",
                         f"reason={self._diagnostic_value(outputs.get('reason'))}",
                         f"source={self._diagnostic_value(outputs.get('source'))}",
+                        f"normalized={'yes' if outputs.get('text_was_normalized') else 'no'}",
+                        f"raw_text={self._summarize_runtime_text(outputs.get('raw_text'))}",
                         f"warning={self._diagnostic_value(outputs.get('warning'))}",
                         f"boxes={self._count_items(outputs.get('detection_boxes'))}",
                         f"points={self._count_items(outputs.get('detection_points'))}",
@@ -539,9 +546,16 @@ class MainScreenPresenter:
         self.cycle_metrics.last_quantity = quantity
         self.cycle_metrics.last_ok_count = ok_count
         self.cycle_metrics.last_ng_count = ng_count
-        self.cycle_metrics.last_result_label = (
-            "OK" if cycle_result.inspection.overall_status.value == "pass" else "FAIL"
+        has_ocr_tasks = any(
+            task_result.task_type.value == "ocr"
+            for task_result in cycle_result.inspection.task_results
         )
+        if has_ocr_tasks and quantity == 0:
+            self.cycle_metrics.last_result_label = "Checking"
+        else:
+            self.cycle_metrics.last_result_label = (
+                "OK" if cycle_result.inspection.overall_status.value == "pass" else "FAIL"
+            )
         self.cycle_metrics.last_cycle_duration_ms = cycle_result.duration_ms
         self.cycle_metrics.last_trigger_source = cycle_result.trigger_source
         self.cycle_metrics.total_count += quantity
@@ -639,3 +653,22 @@ class MainScreenPresenter:
             return f"seq[{len(value)}]"
         text = str(value).strip()
         return text or "<none>"
+
+    def _summarize_runtime_text(self, value: object) -> str:
+        if value is None:
+            return "<none>"
+        if isinstance(value, str):
+            text = (
+                value.replace("\x00", "\\0")
+                .replace("\r", "\\r")
+                .replace("\n", "\\n")
+                .replace("\t", "\\t")
+                .strip()
+            )
+            return text or "<empty>"
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            parts = [self._summarize_runtime_text(item) for item in value]
+            filtered_parts = [part for part in parts if part not in {"<none>", "<empty>"}]
+            return " / ".join(filtered_parts) if filtered_parts else "<empty>"
+        text = str(value).strip()
+        return text or "<empty>"

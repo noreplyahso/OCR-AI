@@ -17,7 +17,9 @@ class OcrMatchResult:
 def match_expected_text(detected_text: str | None, expected_text: str | None) -> OcrMatchResult:
     detected = str(detected_text or "")
     expected = str(expected_text or "")
-    if not detected or not expected:
+    normalized_detected = _normalize_for_match(detected)
+    normalized_expected = _normalize_for_match(expected)
+    if not normalized_detected or not normalized_expected:
         return OcrMatchResult(
             matched=False,
             expected_text=expected,
@@ -27,7 +29,7 @@ def match_expected_text(detected_text: str | None, expected_text: str | None) ->
             match_mode="",
         )
 
-    if _pattern_for_text(expected).search(detected):
+    if _pattern_for_text(normalized_expected).search(normalized_detected):
         return OcrMatchResult(
             matched=True,
             expected_text=expected,
@@ -37,8 +39,8 @@ def match_expected_text(detected_text: str | None, expected_text: str | None) ->
             match_mode="forward",
         )
 
-    for reverse_variant in _reverse_variants(expected):
-        if _pattern_for_text(reverse_variant).search(detected):
+    for reverse_variant in _reverse_variants(normalized_expected):
+        if _pattern_for_text(reverse_variant).search(normalized_detected):
             return OcrMatchResult(
                 matched=True,
                 expected_text=expected,
@@ -83,3 +85,7 @@ def _reverse_variants(value: str) -> set[str]:
     if right_reversed:
         variants.add(right_reversed[:-1] + separator + right_reversed[-1] + left_reversed)
     return variants
+
+
+def _normalize_for_match(value: str) -> str:
+    return value or ""

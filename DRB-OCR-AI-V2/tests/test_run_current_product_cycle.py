@@ -205,3 +205,54 @@ def test_run_current_product_cycle_does_not_count_skipped_ocr_in_history() -> No
     assert history[0].task_count == 0
     assert history[0].ok_count == 0
     assert history[0].ng_count == 0
+
+
+def test_run_current_product_cycle_does_not_record_artifacts_when_ocr_quantity_is_zero(
+    tmp_path: Path,
+) -> None:
+    container = build_container(
+        runtime_settings=AppRuntimeSettings(
+            demo_mode=False,
+            artifact_root_dir=str(tmp_path),
+        )
+    )
+    container.repository.upsert_product(
+        ProductRecord(
+            product_name="PRODUCT-S",
+            model_path="models/product_s.pt",
+        )
+    )
+    container.repository.update_session(user_name="admin", product_name="PRODUCT-S")
+
+    @dataclass
+    class _SkippedPerformCycle:
+        def execute(self, recipe):
+            return InspectionCycleResult(
+                image_ref=ImageFrame(frame=[[0, 1], [2, 3]], capture_seconds=0.01),
+                inspection=InspectionRunResult(
+                    recipe_name=recipe.name,
+                    overall_status=TaskStatus.PASS,
+                    task_results=[
+                        InspectionTaskResult(
+                            task_id="ocr_label_1",
+                            task_type=InspectionTaskType.OCR,
+                            status=TaskStatus.SKIPPED,
+                            message="OCR text was empty for expected product.",
+                            outputs={
+                                "text": "",
+                                "expected_text": "PRODUCT-S",
+                                "counted_quantity": False,
+                            },
+                        )
+                    ],
+                    message="",
+                ),
+                plc_result_sent="OK",
+            )
+
+    container.run_current_product_cycle.perform_cycle = _SkippedPerformCycle()
+
+    result = container.run_current_product_cycle.execute(record_results=True)
+
+    assert result.plc_result_sent == "OK"
+    assert result.artifacts is None

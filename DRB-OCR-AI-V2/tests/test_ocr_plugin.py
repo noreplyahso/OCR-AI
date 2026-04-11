@@ -171,6 +171,31 @@ def test_ocr_plugin_marks_reverse_variant_match_for_legacy_text() -> None:
     assert result.outputs["source"] == "detected_override"
 
 
+def test_ocr_plugin_uses_raw_explicit_detected_text_for_matching_like_v1() -> None:
+    plugin = OcrPlugin()
+    request = InspectionTaskRequest(
+        task_id="ocr_multiline_override",
+        task_type=InspectionTaskType.OCR,
+        image_ref="frame://demo",
+        roi_name="label_roi_1",
+        parameters={
+            "detected_text": "IS35R-\n100\x00",
+            "expected_text": "IS35R-100",
+        },
+    )
+
+    result = plugin.run(request)
+
+    assert result.status == TaskStatus.FAIL
+    assert result.outputs["text"] == "IS35R-100"
+    assert result.outputs["raw_text"] == "IS35R-\n100\x00"
+    assert result.outputs["text_was_normalized"] is True
+    assert result.outputs["matched_text"] == ""
+    assert result.outputs["reason"] == "text_mismatch"
+    assert result.outputs["counted_quantity"] is True
+    assert result.outputs["source"] == "detected_override"
+
+
 def test_ocr_plugin_marks_expected_text_empty_as_skipped() -> None:
     gateway = _FakeLegacyGateway()
     gateway.predict = lambda *args, **kwargs: type(
@@ -312,3 +337,62 @@ def test_ocr_plugin_returns_error_when_expected_text_has_no_runtime_or_detected_
     assert "image is not available" in result.message.lower()
     assert result.outputs["reason"] == "missing_image"
     assert result.outputs["source"] == "image_input"
+
+
+def test_ocr_plugin_normalizes_sequence_text_from_legacy_runtime() -> None:
+    gateway = _FakeLegacyGateway()
+    gateway.predict = lambda *args, **kwargs: type(
+        "_Prediction",
+        (),
+        {
+            "text": ["IS35R-", "100"],
+            "error": "",
+            "raw": ([["box-1"]], ["IS35R-", "100"], [["pt-1"]], ""),
+            "boxes": [["box-1"]],
+            "box_points": [["pt-1"]],
+        },
+    )()
+    plugin = OcrPlugin(runtime_gateway=gateway)
+    request = InspectionTaskRequest(
+        task_id="ocr_runtime_sequence_text",
+        task_type=InspectionTaskType.OCR,
+        image_ref="frame://runtime",
+        roi_name="label_roi",
+        parameters={
+            "image": object(),
+            "model_path": "models/ocr.pt",
+            "expected_text": "IS35R-100",
+        },
+    )
+
+    result = plugin.run(request)
+
+    assert result.status == TaskStatus.PASS
+    assert result.outputs["text"] == "IS35R-100"
+    assert result.outputs["raw_text"] == ["IS35R-", "100"]
+    assert result.outputs["text_was_normalized"] is False
+    assert result.outputs["matched_text"] == "IS35R-100"
+    assert result.outputs["reason"] == "text_match"
+    assert result.outputs["source"] == "runtime"
+
+
+def test_ocr_plugin_counts_whitespace_only_raw_text_as_ng_like_v1() -> None:
+    plugin = OcrPlugin()
+    request = InspectionTaskRequest(
+        task_id="ocr_whitespace_only",
+        task_type=InspectionTaskType.OCR,
+        image_ref="frame://demo",
+        roi_name="label_roi_1",
+        parameters={
+            "detected_text": " \n ",
+            "expected_text": "IS35R-100",
+        },
+    )
+
+    result = plugin.run(request)
+
+    assert result.status == TaskStatus.FAIL
+    assert result.outputs["text"] == ""
+    assert result.outputs["raw_text"] == " \n "
+    assert result.outputs["counted_quantity"] is True
+    assert result.outputs["reason"] == "text_mismatch"

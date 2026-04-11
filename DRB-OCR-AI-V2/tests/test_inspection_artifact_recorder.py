@@ -96,3 +96,29 @@ def test_artifact_recorder_hides_mismatched_ocr_text_in_overlay_annotations(tmp_
     assert len(annotations) == 1
     assert annotations[0]["status"] == "fail"
     assert annotations[0]["label"] == ""
+
+
+def test_artifact_recorder_preserves_raw_text_in_debug_payload(tmp_path: Path) -> None:
+    recorder = InspectionArtifactRecorder(base_dir=tmp_path)
+    task_result = InspectionTaskResult(
+        task_id="ocr_label_1",
+        task_type=InspectionTaskType.OCR,
+        status=TaskStatus.PASS,
+        score=1.0,
+        message="OCR text matched expected product.",
+        outputs={
+            "text": "PRODUCT-A",
+            "raw_text": ["PRODUCT-", "A"],
+            "text_was_normalized": False,
+            "matched_text": "PRODUCT-A",
+            "expected_text": "PRODUCT-A",
+            "roi_name": "label_roi_1",
+            "roi_rect": (0, 0, 2, 2),
+            "roi_image": [[255, 0], [0, 255]],
+        },
+    )
+
+    payload = recorder._build_task_debug_payload(task_result, image_path=None)
+
+    assert payload["outputs"]["raw_text"] == ["PRODUCT-", "A"]
+    assert payload["outputs"]["text_was_normalized"] is False

@@ -31,3 +31,19 @@ def test_match_expected_text_accepts_reversed_variant() -> None:
 
     assert result.matched is True
     assert result.canonical_text == "IS35R-100"
+
+
+def test_match_expected_text_rejects_internal_whitespace_for_forward_match_like_v1() -> None:
+    result = match_expected_text("AA_IS35R - 100_ZZ", "IS35R-100")
+
+    assert result.matched is False
+    assert result.canonical_text == ""
+    assert result.match_mode == ""
+
+
+def test_match_expected_text_rejects_internal_whitespace_for_reversed_match_like_v1() -> None:
+    result = match_expected_text("AA_001 - R53SI_ZZ", "IS35R-100")
+
+    assert result.matched is False
+    assert result.canonical_text == ""
+    assert result.match_mode == ""

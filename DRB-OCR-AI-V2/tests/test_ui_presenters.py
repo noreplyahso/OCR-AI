@@ -287,7 +287,7 @@ def test_main_presenter_does_not_count_empty_ocr_text_in_runtime_metrics() -> No
     assert state.last_ok_count == 0
     assert state.last_ng_count == 0
     assert state.inspection_total_count == 0
-    assert state.last_result_label == "OK"
+    assert state.last_result_label == "Checking"
     assert state.plc_last_result == "OK"
     assert state.preview_annotations == []
 
@@ -339,6 +339,57 @@ def test_main_presenter_hides_mismatched_ocr_text_from_preview_overlay() -> None
     assert state.preview_annotations[0].label == ""
     assert state.last_quantity == 1
     assert state.last_ng_count == 1
+
+
+def test_main_presenter_surfaces_raw_text_when_ocr_text_was_normalized() -> None:
+    container = build_container(runtime_settings=AppRuntimeSettings(demo_mode=False))
+    _seed_main_screen_state(container)
+    presenter = _build_main_presenter(container)
+
+    class _NormalizedTextPerformCycle:
+        def execute(self, recipe):
+            return InspectionCycleResult(
+                image_ref=ImageFrame(frame=[[0, 1], [2, 3]], capture_seconds=0.01),
+                inspection=InspectionRunResult(
+                    recipe_name=recipe.name,
+                    overall_status=TaskStatus.PASS,
+                    task_results=[
+                        InspectionTaskResult(
+                            task_id="ocr_label_1",
+                            task_type=InspectionTaskType.OCR,
+                            status=TaskStatus.PASS,
+                            message="OCR text matched expected product.",
+                            outputs={
+                                "text": "PRODUCT-A",
+                                "raw_text": "PRODUCT-\nA",
+                                "text_was_normalized": True,
+                                "matched_text": "PRODUCT-A",
+                                "expected_text": "PRODUCT-A",
+                                "match_mode": "forward",
+                                "reason": "text_match",
+                                "source": "runtime",
+                                "roi_rect": (0, 0, 2, 2),
+                                "counted_quantity": True,
+                            },
+                        )
+                    ],
+                    message="",
+                ),
+                plc_result_sent="OK",
+                artifacts=None,
+                trigger_source="manual",
+                duration_ms=1.0,
+                signal_summary="",
+            )
+
+    container.run_current_product_cycle.perform_cycle = _NormalizedTextPerformCycle()
+
+    state = presenter.run_cycle()
+
+    assert "normalized=yes" in state.task_summaries[0]
+    assert "raw_text=PRODUCT-\\nA" in state.task_summaries[0]
+    assert "normalized=yes" in state.ocr_diagnostics[0]
+    assert "raw_text=PRODUCT-\\nA" in state.ocr_diagnostics[0]
 
 
 def test_main_presenter_can_grab_preview_frame() -> None:

@@ -7,7 +7,7 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class LegacyOcrPrediction:
-    text: str
+    text: object
     error: str
     raw: object
     boxes: object | None = None
@@ -73,7 +73,7 @@ def _parse_prediction_result(raw_result: object) -> LegacyOcrPrediction:
         if len(raw_result) >= 4:
             boxes, text, box_points, error = raw_result[:4]
             return LegacyOcrPrediction(
-                text="" if text is None else str(text),
+                text=text,
                 error="" if error is None else str(error),
                 raw=raw_result,
                 boxes=boxes,
@@ -82,11 +82,11 @@ def _parse_prediction_result(raw_result: object) -> LegacyOcrPrediction:
         if len(raw_result) >= 3:
             boxes, text, box_points = raw_result[:3]
             return LegacyOcrPrediction(
-                text="" if text is None else str(text),
+                text=text,
                 error="",
                 raw=raw_result,
                 boxes=boxes,
                 box_points=box_points,
             )
 
-    return LegacyOcrPrediction(text=str(raw_result), error="", raw=raw_result)
+    return LegacyOcrPrediction(text=raw_result, error="", raw=raw_result)
