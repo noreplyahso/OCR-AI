@@ -68,5 +68,15 @@ class RepositoryAdapter:
             offset_y=int(updates.get("offset_y", self.session.offset_y)),
             image_width=int(updates.get("image_width", self.session.image_width)),
             image_height=int(updates.get("image_height", self.session.image_height)),
+            roi_x1=int(updates.get("roi_x1", self.session.roi_x1)),
+            roi_x2=int(updates.get("roi_x2", self.session.roi_x2)),
+            roi_x3=int(updates.get("roi_x3", self.session.roi_x3)),
+            roi_x4=int(updates.get("roi_x4", self.session.roi_x4)),
+            roi_x5=int(updates.get("roi_x5", self.session.roi_x5)),
+            roi_y1=int(updates.get("roi_y1", self.session.roi_y1)),
+            roi_y2=int(updates.get("roi_y2", self.session.roi_y2)),
+            roi_y3=int(updates.get("roi_y3", self.session.roi_y3)),
+            roi_y4=int(updates.get("roi_y4", self.session.roi_y4)),
+            roi_y5=int(updates.get("roi_y5", self.session.roi_y5)),
         )
         return self.session

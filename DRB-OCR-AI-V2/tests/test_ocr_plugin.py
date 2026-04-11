@@ -110,6 +110,27 @@ def test_ocr_plugin_crops_roi_and_matches_expected_text_without_runtime() -> Non
     assert result.outputs["matched_text"] == "IS35R-100"
 
 
+def test_ocr_plugin_accepts_explicit_detected_text_without_needing_roi_crop() -> None:
+    plugin = OcrPlugin()
+    request = InspectionTaskRequest(
+        task_id="ocr_detected_override",
+        task_type=InspectionTaskType.OCR,
+        image_ref="frame://demo",
+        roi_name="label_roi_1",
+        parameters={
+            "frame": "frame://placeholder",
+            "roi_rect": (460, -220, 300, 440),
+            "detected_text": "PRODUCT-A",
+            "expected_text": "PRODUCT-A",
+        },
+    )
+
+    result = plugin.run(request)
+
+    assert result.status == TaskStatus.PASS
+    assert result.outputs["matched_text"] == "PRODUCT-A"
+
+
 def test_ocr_plugin_returns_error_when_legacy_runtime_reports_stack_overflow() -> None:
     gateway = _FakeLegacyGateway()
     gateway.predict = lambda *args, **kwargs: type(

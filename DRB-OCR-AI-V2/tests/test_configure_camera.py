@@ -1,4 +1,5 @@
 from drb_inspection.adapters.camera.base import CameraAdapter
+from drb_inspection.adapters.db.models import ProductRecord
 from drb_inspection.app.container import build_container
 
 
@@ -16,6 +17,9 @@ def test_configure_camera_uses_product_exposure_and_session_roi() -> None:
     container = build_container()
     camera = _SpyCamera()
     container.configure_camera.camera = camera
+    container.repository.upsert_product(
+        ProductRecord(product_name="PRODUCT-A", model_path="models/product_a.pt", exposure=3500)
+    )
     container.repository.update_session(
         product_name="PRODUCT-A",
         offset_x=12,

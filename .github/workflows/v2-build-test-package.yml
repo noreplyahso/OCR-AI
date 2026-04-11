@@ -1,0 +1,159 @@
+name: v2-build-test-package
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "DRB-OCR-AI-V2/**"
+      - ".github/workflows/v2-build-test-package.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "DRB-OCR-AI-V2/**"
+      - ".github/workflows/v2-build-test-package.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.9"
+
+concurrency:
+  group: v2-build-test-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-v2:
+    name: Test V2
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: DRB-OCR-AI-V2
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            DRB-OCR-AI-V2/pyproject.toml
+
+      - name: Install V2 development dependencies
+        continue-on-error: false
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -e .[dev] build
+          python -m pip check
+
+      - name: Run V2 unit tests
+        continue-on-error: false
+        run: |
+          New-Item -ItemType Directory -Path test-results -Force | Out-Null
+          python -m pytest tests -q --junitxml=test-results/junit.xml
+
+      - name: Run V2 Qt offscreen smoke test
+        continue-on-error: false
+        env:
+          DRB_V2_QT_OFFSCREEN: "1"
+          DRB_V2_QT_NO_EXEC: "1"
+        run: |
+          python -m drb_inspection.app.bootstrap
+
+      - name: Upload V2 test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-test-results-${{ github.run_id }}
+          path: DRB-OCR-AI-V2/test-results
+          if-no-files-found: warn
+          retention-days: 14
+
+  package-v2:
+    name: Package V2
+    needs:
+      - test-v2
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: DRB-OCR-AI-V2
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            DRB-OCR-AI-V2/pyproject.toml
+
+      - name: Install V2 packaging dependencies
+        continue-on-error: false
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install build
+
+      - name: Build V2 source and wheel packages
+        continue-on-error: false
+        run: |
+          if (Test-Path build) {
+            Remove-Item build -Recurse -Force
+          }
+          if (Test-Path dist) {
+            Remove-Item dist -Recurse -Force
+          }
+          python -m build
+
+      - name: Smoke test installed V2 wheel
+        continue-on-error: false
+        run: |
+          $venvPath = Join-Path $PWD ".pkg-smoke"
+          if (Test-Path $venvPath) {
+            Remove-Item $venvPath -Recurse -Force
+          }
+
+          python -m venv $venvPath
+          $pythonExe = Join-Path $venvPath "Scripts\python.exe"
+
+          & $pythonExe -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upgrade pip inside the V2 smoke-test virtual environment."
+          }
+
+          $wheel = Get-ChildItem -Path dist -Filter "*.whl" | Select-Object -First 1
+          if (-not $wheel) {
+            throw "Wheel artifact was not created."
+          }
+
+          & $pythonExe -m pip install $wheel.FullName
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to install the built V2 wheel."
+          }
+
+          $env:DRB_V2_QT_OFFSCREEN = "1"
+          $env:DRB_V2_QT_NO_EXEC = "1"
+          & $pythonExe -m drb_inspection.app.bootstrap
+          if ($LASTEXITCODE -ne 0) {
+            throw "Installed V2 wheel smoke test failed."
+          }
+
+      - name: Upload V2 package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-package-${{ github.run_id }}
+          path: DRB-OCR-AI-V2/dist/*
+          if-no-files-found: error
+          retention-days: 14

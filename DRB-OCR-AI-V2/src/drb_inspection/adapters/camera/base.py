@@ -10,6 +10,7 @@ from drb_inspection.adapters.camera.models import CameraConnectionSettings, Came
 class CameraAdapter:
     connection_settings: CameraConnectionSettings = field(default_factory=CameraConnectionSettings)
     settings: CameraSettings = field(default_factory=CameraSettings)
+    connected: bool = True
 
     @property
     def vendor(self) -> CameraVendor:
@@ -22,13 +23,15 @@ class CameraAdapter:
         self.settings = settings
 
     def connect(self) -> bool:
+        self.connected = True
         return True
 
     def disconnect(self) -> None:
+        self.connected = False
         return None
 
     def is_connected(self) -> bool:
-        return True
+        return self.connected
 
     def grab(self) -> ImageFrame:
         return ImageFrame(frame="frame://placeholder", capture_seconds=0.0)

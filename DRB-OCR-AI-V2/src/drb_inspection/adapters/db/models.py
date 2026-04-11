@@ -1,11 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
+
+
+class RepositoryBackend(str, Enum):
+    MEMORY = "memory"
+    MYSQL = "mysql"
+
+
+LEGACY_ROI_WIDTH = 300
+LEGACY_ROI_HEIGHT = 440
 
 
 @dataclass
 class DatabaseSettings:
     host: str = "localhost"
+    port: int = 3306
     user: str = "drb"
     password: str = "drb123456"
     database: str = "drb_text"
@@ -44,10 +55,40 @@ class SessionRecord:
     plc_ip: str = ""
     plc_port: int | str = ""
     plc_protocol: str = ""
-    result_time: int | None = None
-    sleep_time: int | None = None
-    zoom_factor: float | None = None
-    offset_x: int = 0
-    offset_y: int = 0
-    image_width: int = 0
-    image_height: int = 0
+    result_time: int | None = 1
+    sleep_time: int | None = 10
+    zoom_factor: float | None = 0.4
+    offset_x: int = 300
+    offset_y: int = 1400
+    image_width: int = 2500
+    image_height: int = 1000
+    roi_x1: int = 760
+    roi_x2: int = 1250
+    roi_x3: int = 1730
+    roi_x4: int = 2220
+    roi_x5: int = 2710
+    roi_y1: int = 1180
+    roi_y2: int = 1180
+    roi_y3: int = 1180
+    roi_y4: int = 1180
+    roi_y5: int = 1180
+
+    def roi_points(self) -> list[tuple[int, int]]:
+        return [
+            (self.roi_x1, self.roi_y1),
+            (self.roi_x2, self.roi_y2),
+            (self.roi_x3, self.roi_y3),
+            (self.roi_x4, self.roi_y4),
+            (self.roi_x5, self.roi_y5),
+        ]
+
+    def roi_rects(
+        self,
+        *,
+        roi_width: int = LEGACY_ROI_WIDTH,
+        roi_height: int = LEGACY_ROI_HEIGHT,
+    ) -> list[tuple[int, int, int, int]]:
+        return [
+            (x - self.offset_x, y - self.offset_y, roi_width, roi_height)
+            for x, y in self.roi_points()
+        ]

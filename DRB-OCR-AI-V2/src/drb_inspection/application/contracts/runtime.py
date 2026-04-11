@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from drb_inspection.adapters.camera.models import ImageFrame
+from drb_inspection.adapters.plc.models import PlcReadState
+from drb_inspection.application.contracts.inspection import InspectionCycleResult
 
 
 @dataclass(frozen=True)
@@ -19,4 +21,22 @@ class RuntimeStatus:
 class PreviewFrameResult:
     image_frame: ImageFrame | None
     camera_connected: bool
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class RuntimeHardwareResult:
+    success: bool
+    camera_connected: bool
+    plc_connected: bool
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class PlcPollResult:
+    read_state: PlcReadState
+    action: str = "idle"
+    cycle_result: InspectionCycleResult | None = None
+    cycle_triggered: bool = False
+    signal_summary: str = ""
     message: str = ""

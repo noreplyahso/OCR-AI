@@ -27,11 +27,23 @@ class DesktopShell:
             load_main_screen_context=self.container.load_main_screen_context,
             load_session_settings=self.container.load_session_settings,
             load_runtime_status=self.container.load_runtime_status,
+            connect_camera=self.container.connect_camera,
+            disconnect_camera=self.container.disconnect_camera,
+            connect_plc=self.container.connect_plc,
+            disconnect_plc=self.container.disconnect_plc,
+            shutdown_runtime=self.container.shutdown_runtime,
             configure_camera=self.container.configure_camera,
             grab_preview=self.container.grab_preview,
+            import_product_catalog=self.container.import_product_catalog,
             save_session_settings=self.container.save_session_settings,
+            move_session_roi=self.container.move_session_roi,
+            save_product_settings=self.container.save_product_settings,
             select_product=self.container.select_product,
             run_current_product_cycle=self.container.run_current_product_cycle,
+            poll_plc_signals=self.container.poll_plc_signals,
+        )
+        self.main_presenter.runtime_controls.recording_enabled = (
+            self.container.run_current_product_cycle.runtime_settings.record_results_default
         )
 
     def launch(self) -> ScreenId:
@@ -58,6 +70,8 @@ class DesktopShell:
 
     def logout(self) -> ScreenId:
         self.container.logout_user.execute()
+        self.main_presenter.clear_cycle_metrics()
+        self.main_presenter.clear_runtime_controls()
         self.login_state = self.login_presenter.load()
         self.main_state = None
         self.active_screen = ScreenId.LOGIN

@@ -20,6 +20,18 @@ class OcrPlugin:
     loaded_model_path: str | None = None
 
     def run(self, request: InspectionTaskRequest) -> InspectionTaskResult:
+        expected_text = str(request.parameters.get("expected_text", ""))
+        detected_text = str(request.parameters.get("detected_text", ""))
+        roi_rect = request.parameters.get("roi_rect")
+        if detected_text:
+            return self._build_text_result(
+                request=request,
+                detected_text=detected_text,
+                expected_text=expected_text,
+                roi_rect=roi_rect,
+                roi_image=None,
+            )
+
         try:
             image = self._resolve_image(request)
         except ValueError as exc:
@@ -34,11 +46,11 @@ class OcrPlugin:
                     "matched_text": "",
                     "expected_text": str(request.parameters.get("expected_text", "")),
                     "roi_name": request.roi_name,
+                    "roi_rect": roi_rect,
                 },
             )
         model_path = request.parameters.get("model_path")
-        expected_text = str(request.parameters.get("expected_text", ""))
-        detected_text = str(request.parameters.get("detected_text", ""))
+        detected_text = ""
 
         if self.runtime_gateway and image is not None and model_path:
             resolved_model_path = str(model_path)
@@ -63,6 +75,9 @@ class OcrPlugin:
                         "text": prediction.text,
                         "raw_result": prediction.raw,
                         "error": prediction.error,
+                        "roi_name": request.roi_name,
+                        "roi_rect": roi_rect,
+                        "roi_image": image,
                     },
                 )
             detected_text = prediction.text
@@ -111,6 +126,23 @@ class OcrPlugin:
                     },
                 )
 
+        return self._build_text_result(
+            request=request,
+            detected_text=detected_text,
+            expected_text=expected_text,
+            roi_rect=roi_rect,
+            roi_image=image,
+        )
+
+    def _build_text_result(
+        self,
+        *,
+        request: InspectionTaskRequest,
+        detected_text: str,
+        expected_text: str,
+        roi_rect,
+        roi_image,
+    ) -> InspectionTaskResult:
         if expected_text:
             match_result = match_expected_text(detected_text, expected_text)
             return InspectionTaskResult(
@@ -124,6 +156,8 @@ class OcrPlugin:
                     "matched_text": match_result.canonical_text,
                     "expected_text": expected_text,
                     "roi_name": request.roi_name,
+                    "roi_rect": roi_rect,
+                    "roi_image": roi_image,
                 },
             )
 
@@ -138,6 +172,8 @@ class OcrPlugin:
                 "matched_text": "",
                 "expected_text": expected_text,
                 "roi_name": request.roi_name,
+                "roi_rect": roi_rect,
+                "roi_image": roi_image,
             },
         )
 

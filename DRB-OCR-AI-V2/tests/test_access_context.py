@@ -1,4 +1,4 @@
-from drb_inspection.adapters.db.models import UserRecord
+from drb_inspection.adapters.db.models import ProductRecord, UserRecord
 from drb_inspection.app.container import build_container
 from drb_inspection.application.contracts.context import LoginCommand
 
@@ -20,6 +20,10 @@ def test_load_main_screen_context_uses_session_user_and_role() -> None:
     container.repository.save_user(
         UserRecord(user_name="supervisor1", password_hash="pw", role="Supervisor")
     )
+    container.repository.upsert_product(
+        ProductRecord(product_name="PRODUCT-A", model_path="models/product_a.pt")
+    )
+    container.repository.update_session(product_name="PRODUCT-A")
     container.login_user.execute(LoginCommand(user_name="supervisor1", password="pw"))
 
     context = container.load_main_screen_context.execute()

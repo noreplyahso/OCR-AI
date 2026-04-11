@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 from drb_inspection.adapters.plc.base import PlcAdapter
 from drb_inspection.adapters.plc.client import PlcClient
-from drb_inspection.adapters.plc.models import PlcConnectionSettings
+from drb_inspection.adapters.plc.models import PlcConnectionSettings, PlcReadState
 
 
 @dataclass
@@ -43,3 +43,18 @@ class ProtocolPlcAdapter(PlcAdapter):
 
     def last_result(self) -> str:
         return self.sent_results[-1] if self.sent_results else ""
+
+    def read_inputs_once(self) -> PlcReadState:
+        if not self.is_connected() and not self.connect():
+            return PlcReadState()
+        return self.client.read_inputs_once()
+
+    def set_light(self, enabled: bool) -> bool:
+        if not self.is_connected() and not self.connect():
+            return False
+        return self.client.write_light(enabled)
+
+    def pulse_error(self, pulse_seconds: float = 0.5) -> bool:
+        if not self.is_connected() and not self.connect():
+            return False
+        return self.client.pulse_error(pulse_seconds=pulse_seconds)

@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "Next-generation modular desktop inspection platform for OCR, classify, and segment workflows."
 requires-python = ">=3.9"
 dependencies = [
+  "openpyxl>=3.1,<4.0",
   "PyQt5>=5.15,<6.0",
+  "PyMySQL>=1.1,<2.0",
   "PyYAML>=6.0,<7.0",
 ]
 

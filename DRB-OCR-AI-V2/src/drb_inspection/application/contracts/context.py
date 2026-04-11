@@ -42,6 +42,12 @@ class ProductSelectionResult:
 
 
 @dataclass(frozen=True)
+class ProductSettingsResult:
+    product: ProductRecord
+    session: SessionRecord
+
+
+@dataclass(frozen=True)
 class SessionSettingsResult:
     session: SessionRecord
 
@@ -76,3 +82,4 @@ class MainScreenContext:
     available_products: list[str]
     access_profile: AccessProfile = field(default_factory=AccessProfile)
     selected_model_path: str = ""
+    selected_product: ProductRecord | None = None

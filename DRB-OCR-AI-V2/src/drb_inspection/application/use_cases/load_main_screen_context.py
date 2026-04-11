@@ -28,5 +28,6 @@ class LoadMainScreenContextUseCase:
             session=session,
             available_products=available_products,
             selected_model_path=selected_product.model_path if selected_product else "",
+            selected_product=selected_product,
             access_profile=access_profile,
         )

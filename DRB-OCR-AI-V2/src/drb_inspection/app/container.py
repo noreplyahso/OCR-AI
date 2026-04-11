@@ -1,27 +1,40 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from drb_inspection.adapters.camera.base import CameraAdapter
 from drb_inspection.adapters.camera.factory import build_camera_adapter
 from drb_inspection.adapters.db.base import RepositoryAdapter
+from drb_inspection.adapters.db.factory import build_repository
 from drb_inspection.adapters.db.models import ProductRecord, SessionRecord, UserRecord
 from drb_inspection.adapters.plc.base import PlcAdapter
 from drb_inspection.adapters.plc.factory import build_plc_adapter
 from drb_inspection.app.settings import AppRuntimeSettings
+from drb_inspection.application.use_cases.connect_camera import ConnectCameraUseCase
+from drb_inspection.application.use_cases.connect_plc import ConnectPlcUseCase
 from drb_inspection.application.use_cases.configure_camera import ConfigureCurrentCameraUseCase
+from drb_inspection.application.use_cases.disconnect_camera import DisconnectCameraUseCase
+from drb_inspection.application.use_cases.disconnect_plc import DisconnectPlcUseCase
 from drb_inspection.application.use_cases.get_access_profile import GetAccessProfileUseCase
 from drb_inspection.application.use_cases.grab_preview import GrabPreviewUseCase
+from drb_inspection.application.use_cases.import_product_catalog import ImportProductCatalogUseCase
 from drb_inspection.application.use_cases.load_main_screen_context import LoadMainScreenContextUseCase
 from drb_inspection.application.use_cases.load_runtime_status import LoadRuntimeStatusUseCase
 from drb_inspection.application.use_cases.load_session_settings import LoadSessionSettingsUseCase
 from drb_inspection.application.use_cases.login_user import LoginUserUseCase
+from drb_inspection.application.use_cases.move_session_roi import MoveSessionRoiUseCase
 from drb_inspection.application.use_cases.logout_user import LogoutUserUseCase
 from drb_inspection.application.use_cases.perform_cycle import PerformInspectionCycleUseCase
+from drb_inspection.application.use_cases.poll_plc_signals import PollPlcSignalsUseCase
 from drb_inspection.application.use_cases.run_current_product_cycle import RunCurrentProductCycleUseCase
 from drb_inspection.application.use_cases.run_inspection import RunInspectionUseCase
+from drb_inspection.application.use_cases.save_product_settings import SaveProductSettingsUseCase
 from drb_inspection.application.use_cases.save_session_settings import SaveSessionSettingsUseCase
 from drb_inspection.application.use_cases.select_product import SelectProductUseCase
+from drb_inspection.application.use_cases.shutdown_runtime import ShutdownRuntimeUseCase
+from drb_inspection.application.services.inspection_artifact_recorder import InspectionArtifactRecorder
+from drb_inspection.application.services.product_catalog_loader import ProductCatalogLoader
 from drb_inspection.application.use_cases.sync_products import SyncProductsUseCase
 from drb_inspection.domain.inspection.pipeline import InspectionPipeline
 from drb_inspection.plugins.classify.plugin import ClassifyPlugin
@@ -44,22 +57,27 @@ class AppContainer:
     login_user: LoginUserUseCase
     logout_user: LogoutUserUseCase
     sync_products: SyncProductsUseCase
+    import_product_catalog: ImportProductCatalogUseCase
     select_product: SelectProductUseCase
     load_session_settings: LoadSessionSettingsUseCase
     save_session_settings: SaveSessionSettingsUseCase
+    move_session_roi: MoveSessionRoiUseCase
+    save_product_settings: SaveProductSettingsUseCase
     get_access_profile: GetAccessProfileUseCase
     load_main_screen_context: LoadMainScreenContextUseCase
     load_runtime_status: LoadRuntimeStatusUseCase
+    connect_camera: ConnectCameraUseCase
+    disconnect_camera: DisconnectCameraUseCase
+    connect_plc: ConnectPlcUseCase
+    disconnect_plc: DisconnectPlcUseCase
+    shutdown_runtime: ShutdownRuntimeUseCase
     configure_camera: ConfigureCurrentCameraUseCase
     grab_preview: GrabPreviewUseCase
     run_current_product_cycle: RunCurrentProductCycleUseCase
+    poll_plc_signals: PollPlcSignalsUseCase
 
 
-def build_container(runtime_settings: AppRuntimeSettings | None = None) -> AppContainer:
-    settings = runtime_settings or AppRuntimeSettings()
-    camera = build_camera_adapter(settings.camera_connection)
-    plc = build_plc_adapter(settings.plc_connection)
-    repository = RepositoryAdapter()
+def _seed_demo_repository(repository: RepositoryAdapter, settings: AppRuntimeSettings) -> None:
     repository.save_user(UserRecord(user_name="admin", password_hash="admin", role="Administrator"))
     repository.upsert_product(
         ProductRecord(
@@ -71,19 +89,30 @@ def build_container(runtime_settings: AppRuntimeSettings | None = None) -> AppCo
             threshold_mns=0.5,
         )
     )
-    repository.save_session(
-        SessionRecord(
-            product_name="PRODUCT-A",
-            camera_vendor=settings.camera_connection.vendor.value,
-            plc_vendor=settings.plc_connection.vendor.value,
-            plc_ip=settings.plc_connection.ip,
-            plc_port=settings.plc_connection.port,
-            plc_protocol=settings.plc_connection.protocol_type.value,
-            result_time=100,
-            sleep_time=10,
-            zoom_factor=1.0,
-        )
+    repository.update_session(product_name="PRODUCT-A")
+
+
+def _apply_runtime_defaults(repository: RepositoryAdapter, settings: AppRuntimeSettings) -> None:
+    repository.update_session(
+        camera_vendor=settings.camera_connection.vendor.value,
+        plc_vendor=settings.plc_connection.vendor.value,
+        plc_ip=settings.plc_connection.ip,
+        plc_port=settings.plc_connection.port,
+        plc_protocol=settings.plc_connection.protocol_type.value,
     )
+
+
+def build_container(runtime_settings: AppRuntimeSettings | None = None) -> AppContainer:
+    settings = runtime_settings or AppRuntimeSettings()
+    camera = build_camera_adapter(settings.camera_connection)
+    plc = build_plc_adapter(settings.plc_connection)
+    repository = build_repository(
+        backend=settings.repository_backend,
+        database_settings=settings.database_settings,
+    )
+    _apply_runtime_defaults(repository=repository, settings=settings)
+    if settings.seed_demo_data:
+        _seed_demo_repository(repository=repository, settings=settings)
     worker = LocalAiWorker()
     runtime_gateway = (
         LegacyOcrRuntimeGateway(runtime_dir=settings.ocr_runtime_dir)
@@ -107,22 +136,43 @@ def build_container(runtime_settings: AppRuntimeSettings | None = None) -> AppCo
     login_user = LoginUserUseCase(repository=repository)
     logout_user = LogoutUserUseCase(repository=repository)
     sync_products = SyncProductsUseCase(repository=repository)
+    import_product_catalog = ImportProductCatalogUseCase(
+        loader=ProductCatalogLoader(),
+        sync_products=sync_products,
+    )
     select_product = SelectProductUseCase(repository=repository)
     load_session_settings = LoadSessionSettingsUseCase(repository=repository)
     save_session_settings = SaveSessionSettingsUseCase(repository=repository)
+    move_session_roi = MoveSessionRoiUseCase(repository=repository)
+    save_product_settings = SaveProductSettingsUseCase(repository=repository)
     get_access_profile = GetAccessProfileUseCase()
     load_main_screen_context = LoadMainScreenContextUseCase(
         repository=repository,
         get_access_profile=get_access_profile,
     )
     load_runtime_status = LoadRuntimeStatusUseCase(camera=camera, plc=plc)
+    connect_camera = ConnectCameraUseCase(camera=camera, plc=plc)
+    disconnect_camera = DisconnectCameraUseCase(camera=camera, plc=plc)
+    connect_plc = ConnectPlcUseCase(camera=camera, plc=plc)
+    disconnect_plc = DisconnectPlcUseCase(camera=camera, plc=plc)
+    shutdown_runtime = ShutdownRuntimeUseCase(camera=camera, plc=plc)
     configure_camera = ConfigureCurrentCameraUseCase(camera=camera, repository=repository)
     grab_preview = GrabPreviewUseCase(camera=camera)
+    artifact_recorder = (
+        InspectionArtifactRecorder(base_dir=Path(settings.artifact_root_dir))
+        if settings.artifact_root_dir
+        else None
+    )
     run_current_product_cycle = RunCurrentProductCycleUseCase(
         repository=repository,
         configure_camera=configure_camera,
         perform_cycle=perform_cycle,
         runtime_settings=settings,
+        artifact_recorder=artifact_recorder,
+    )
+    poll_plc_signals = PollPlcSignalsUseCase(
+        plc=plc,
+        run_current_product_cycle=run_current_product_cycle,
     )
     return AppContainer(
         camera=camera,
@@ -135,13 +185,22 @@ def build_container(runtime_settings: AppRuntimeSettings | None = None) -> AppCo
         login_user=login_user,
         logout_user=logout_user,
         sync_products=sync_products,
+        import_product_catalog=import_product_catalog,
         select_product=select_product,
         load_session_settings=load_session_settings,
         save_session_settings=save_session_settings,
+        move_session_roi=move_session_roi,
+        save_product_settings=save_product_settings,
         get_access_profile=get_access_profile,
         load_main_screen_context=load_main_screen_context,
         load_runtime_status=load_runtime_status,
+        connect_camera=connect_camera,
+        disconnect_camera=disconnect_camera,
+        connect_plc=connect_plc,
+        disconnect_plc=disconnect_plc,
+        shutdown_runtime=shutdown_runtime,
         configure_camera=configure_camera,
         grab_preview=grab_preview,
         run_current_product_cycle=run_current_product_cycle,
+        poll_plc_signals=poll_plc_signals,
     )

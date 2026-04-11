@@ -1,20 +1,30 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 from PyQt5.QtCore import Qt, QRect
 from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 
 
-def build_preview_pixmap(frame: Any, summary: str, width: int = 520, height: int = 300) -> QPixmap:
+def build_preview_pixmap(
+    frame: Any,
+    summary: str,
+    width: int = 520,
+    height: int = 300,
+    roi_rects: Sequence[tuple[int, int, int, int]] | None = None,
+) -> QPixmap:
     if frame is not None:
-        pixmap = _try_build_pixmap_from_array(frame, width, height)
+        pixmap = _try_build_pixmap_from_array(frame, roi_rects=roi_rects or [])
         if pixmap is not None:
-            return pixmap
+            return pixmap.scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
     return _build_placeholder_pixmap(summary=summary or "No preview available.", width=width, height=height)
 
 
-def _try_build_pixmap_from_array(frame: Any, width: int, height: int) -> QPixmap | None:
+def _try_build_pixmap_from_array(
+    frame: Any,
+    *,
+    roi_rects: Sequence[tuple[int, int, int, int]],
+) -> QPixmap | None:
     shape = getattr(frame, "shape", None)
     data = getattr(frame, "data", None)
     if shape is None or data is None:
@@ -39,7 +49,24 @@ def _try_build_pixmap_from_array(frame: Any, width: int, height: int) -> QPixmap
             )
         else:
             return None
-        return QPixmap.fromImage(image.copy()).scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        pixmap = QPixmap.fromImage(image.copy())
+        if roi_rects:
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            line_width = max(2, int(max(1, pixmap.width()) / 500))
+            painter.setPen(QPen(QColor("#38c172"), line_width))
+            label_font = QFont("Segoe UI", max(10, int(max(1, pixmap.width()) / 95)))
+            label_font.setBold(True)
+            painter.setFont(label_font)
+            for index, (x_value, y_value, rect_width, rect_height) in enumerate(roi_rects, start=1):
+                painter.drawRect(int(x_value), int(y_value), int(rect_width), int(rect_height))
+                painter.drawText(
+                    int(x_value),
+                    max(28, int(y_value) - 12),
+                    f"ROI {index}",
+                )
+            painter.end()
+        return pixmap
     except Exception:
         return None
 
