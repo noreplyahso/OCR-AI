@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from drb_inspection.adapters.db.models import ProductRecord, SessionRecord, UserRecord
+from drb_inspection.adapters.db.models import InspectionHistoryRecord, ProductRecord, SessionRecord, UserRecord
 
 
 @dataclass(frozen=True)
@@ -80,6 +80,7 @@ class MainScreenContext:
     current_role: str
     session: SessionRecord
     available_products: list[str]
+    recent_inspection_history: list[InspectionHistoryRecord] = field(default_factory=list)
     access_profile: AccessProfile = field(default_factory=AccessProfile)
     selected_model_path: str = ""
     selected_product: ProductRecord | None = None

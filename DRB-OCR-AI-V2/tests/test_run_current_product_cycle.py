@@ -69,8 +69,10 @@ def test_run_current_product_cycle_uses_product_configuration_in_recipe() -> Non
     last_step = spy.captured_recipe.steps[-1]
 
     assert result.plc_result_sent == "OK"
+    assert result.trigger_source == "manual"
     assert len(spy.captured_recipe.steps) == 5
     assert first_step.parameters["model_path"] == "models/product_x.pt"
+    assert first_step.parameters["row_threshold"] == 20
     assert first_step.parameters["acceptance_threshold"] == 0.9
     assert first_step.parameters["duplication_threshold"] == 0.3
     assert first_step.parameters["roi_rect"] == (460, -220, 300, 440)
@@ -127,3 +129,26 @@ def test_run_current_product_cycle_records_artifacts_when_enabled(tmp_path: Path
     assert Path(result.artifacts.summary_path).exists()
     assert Path(result.artifacts.frame_path).exists()
     assert len(result.artifacts.task_artifacts) == 1
+    assert result.trigger_source == "manual"
+
+
+def test_run_current_product_cycle_persists_history_entry_to_repository() -> None:
+    container = build_container(runtime_settings=AppRuntimeSettings(demo_mode=True))
+    container.repository.upsert_product(
+        ProductRecord(
+            product_name="PRODUCT-H",
+            model_path="models/product_h.pt",
+        )
+    )
+    container.repository.update_session(user_name="admin", product_name="PRODUCT-H")
+
+    result = container.run_current_product_cycle.execute()
+    history = container.repository.list_recent_inspection_history(limit=1)
+
+    assert result.plc_result_sent == "OK"
+    assert len(history) == 1
+    assert history[0].product_name == "PRODUCT-H"
+    assert history[0].plc_result_sent == "OK"
+    assert history[0].task_count == 5
+    assert history[0].trigger_source == "manual"
+    assert history[0].cycle_duration_ms >= 0.0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 
 
@@ -92,3 +93,21 @@ class SessionRecord:
             (x - self.offset_x, y - self.offset_y, roi_width, roi_height)
             for x, y in self.roi_points()
         ]
+
+
+@dataclass(frozen=True)
+class InspectionHistoryRecord:
+    recorded_at: datetime
+    user_name: str = ""
+    product_name: str = ""
+    recipe_name: str = ""
+    overall_status: str = ""
+    plc_result_sent: str = ""
+    trigger_source: str = ""
+    cycle_duration_ms: float = 0.0
+    signal_summary: str = ""
+    task_count: int = 0
+    ok_count: int = 0
+    ng_count: int = 0
+    message: str = ""
+    artifact_dir: str = ""

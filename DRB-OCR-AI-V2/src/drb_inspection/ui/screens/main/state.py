@@ -50,8 +50,11 @@ class MainScreenState:
     last_ok_count: int = 0
     last_ng_count: int = 0
     last_result_label: str = ""
+    last_cycle_duration_ms: float = 0.0
+    last_trigger_source: str = ""
     artifact_summary: str = ""
     last_artifact_dir: str = ""
+    recent_history_summaries: list[str] = field(default_factory=list)
     preview_frame: ImageFrame | None = None
     preview_summary: str = ""
     last_cycle_status: str = ""

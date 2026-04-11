@@ -94,9 +94,16 @@ class PollPlcSignalsUseCase:
                 )
             try:
                 if record_results:
-                    cycle_result = self.run_current_product_cycle.execute(record_results=True)
+                    cycle_result = self.run_current_product_cycle.execute(
+                        record_results=True,
+                        trigger_source="plc_grab",
+                        signal_summary=signal_summary,
+                    )
                 else:
-                    cycle_result = self.run_current_product_cycle.execute()
+                    cycle_result = self.run_current_product_cycle.execute(
+                        trigger_source="plc_grab",
+                        signal_summary=signal_summary,
+                    )
             except Exception as exc:
                 return PlcPollResult(
                     read_state=read_state,

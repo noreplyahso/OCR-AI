@@ -19,6 +19,7 @@ class LoadMainScreenContextUseCase:
         access_profile = self.get_access_profile.execute(role=role)
         available_products = [product.product_name for product in self.repository.list_products()]
         selected_product = self.repository.get_product(session.product_name) if session.product_name else None
+        recent_history = self.repository.list_recent_inspection_history(limit=10)
         self.repository.record_event(
             f"Load main screen context user={session.user_name or ''} role={role} products={len(available_products)}"
         )
@@ -27,6 +28,7 @@ class LoadMainScreenContextUseCase:
             current_role=role,
             session=session,
             available_products=available_products,
+            recent_inspection_history=recent_history,
             selected_model_path=selected_product.model_path if selected_product else "",
             selected_product=selected_product,
             access_profile=access_profile,

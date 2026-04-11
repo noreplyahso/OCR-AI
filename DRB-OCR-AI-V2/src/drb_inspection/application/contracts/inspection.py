@@ -64,3 +64,6 @@ class InspectionCycleResult:
     inspection: InspectionRunResult
     plc_result_sent: str
     artifacts: InspectionCycleArtifacts | None = None
+    trigger_source: str = "manual"
+    duration_ms: float = 0.0
+    signal_summary: str = ""

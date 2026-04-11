@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+from datetime import datetime
 from dataclasses import dataclass, field
 
 from drb_inspection.adapters.db.base import RepositoryAdapter
-from drb_inspection.adapters.db.models import DatabaseSettings, ProductRecord, SessionRecord, UserRecord
+from drb_inspection.adapters.db.models import (
+    DatabaseSettings,
+    InspectionHistoryRecord,
+    ProductRecord,
+    SessionRecord,
+    UserRecord,
+)
 
 
 @dataclass
@@ -110,6 +117,7 @@ class MySqlRepositoryAdapter(RepositoryAdapter):
     users_gateway: SqlTableGateway | None = None
     products_gateway: SqlTableGateway | None = None
     session_gateway: SqlTableGateway | None = None
+    history_gateway: SqlTableGateway | None = None
     product_overlays: dict[str, ProductRecord] = field(default_factory=dict)
     session_overlay: dict[str, object] = field(default_factory=dict)
 
@@ -121,6 +129,8 @@ class MySqlRepositoryAdapter(RepositoryAdapter):
         self.users_gateway = SqlTableGateway(connection=self.connection, table_name="users")
         self.products_gateway = SqlTableGateway(connection=self.connection, table_name="product")
         self.session_gateway = SqlTableGateway(connection=self.connection, table_name="current_session")
+        self._ensure_history_table()
+        self.history_gateway = SqlTableGateway(connection=self.connection, table_name="inspection_history")
         self._ensure_session_row()
 
     def record_event(self, message: str) -> None:
@@ -264,6 +274,48 @@ class MySqlRepositoryAdapter(RepositoryAdapter):
             )
         )
 
+    def save_inspection_history(self, entry: InspectionHistoryRecord) -> InspectionHistoryRecord:
+        if self.history_gateway is None:
+            self.inspection_history.insert(0, entry)
+            return entry
+        self.history_gateway.insert(
+            {
+                "RecordedAt": entry.recorded_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "UserName": entry.user_name or None,
+                "ProductName": entry.product_name or None,
+                "RecipeName": entry.recipe_name or None,
+                "OverallStatus": entry.overall_status or None,
+                "PlcResultSent": entry.plc_result_sent or None,
+                "TriggerSource": entry.trigger_source or None,
+                "CycleDurationMs": entry.cycle_duration_ms,
+                "SignalSummary": entry.signal_summary or None,
+                "TaskCount": entry.task_count,
+                "OkCount": entry.ok_count,
+                "NgCount": entry.ng_count,
+                "Message": entry.message or None,
+                "ArtifactDir": entry.artifact_dir or None,
+            }
+        )
+        return entry
+
+    def list_recent_inspection_history(self, limit: int = 10) -> list[InspectionHistoryRecord]:
+        normalized_limit = max(0, int(limit))
+        if self.history_gateway is None:
+            return list(self.inspection_history[:normalized_limit])
+        if self.connection is None:
+            rows = sorted(
+                self.history_gateway.get_all(),
+                key=lambda row: (row.get("RecordedAt") or "", row.get("ID") or 0),
+                reverse=True,
+            )
+            return [self._map_history(row) for row in rows[:normalized_limit]]
+        self.connection.execute(
+            "SELECT * FROM inspection_history ORDER BY RecordedAt DESC, ID DESC LIMIT %s",
+            (normalized_limit,),
+        )
+        rows = self.connection.fetchall()
+        return [self._map_history(row) for row in rows]
+
     def close(self) -> None:
         if self.connection is not None:
             self.connection.close()
@@ -273,6 +325,31 @@ class MySqlRepositoryAdapter(RepositoryAdapter):
         rows = self.session_gateway.get_by("ID", 1)
         if not rows:
             self.session_gateway.insert_or_update({"ID": 1})
+
+    def _ensure_history_table(self) -> None:
+        if self.connection is None:
+            return
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS inspection_history (
+                ID BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                RecordedAt DATETIME NOT NULL,
+                UserName VARCHAR(255) NULL,
+                ProductName VARCHAR(255) NULL,
+                RecipeName VARCHAR(255) NULL,
+                OverallStatus VARCHAR(64) NULL,
+                PlcResultSent VARCHAR(64) NULL,
+                TriggerSource VARCHAR(64) NULL,
+                CycleDurationMs DOUBLE NOT NULL DEFAULT 0,
+                SignalSummary TEXT NULL,
+                TaskCount INT NOT NULL DEFAULT 0,
+                OkCount INT NOT NULL DEFAULT 0,
+                NgCount INT NOT NULL DEFAULT 0,
+                Message TEXT NULL,
+                ArtifactDir TEXT NULL
+            )
+            """
+        )
 
     def _map_product(self, row: dict) -> ProductRecord:
         return ProductRecord(
@@ -307,6 +384,32 @@ class MySqlRepositoryAdapter(RepositoryAdapter):
             roi_y3=int(row.get("ROIy3") or 0),
             roi_y4=int(row.get("ROIy4") or 0),
             roi_y5=int(row.get("ROIy5") or 0),
+        )
+
+    def _map_history(self, row: dict) -> InspectionHistoryRecord:
+        recorded_at = row.get("RecordedAt")
+        if isinstance(recorded_at, str):
+            try:
+                recorded_at_value = datetime.fromisoformat(recorded_at)
+            except ValueError:
+                recorded_at_value = datetime.strptime(recorded_at, "%Y-%m-%d %H:%M:%S")
+        else:
+            recorded_at_value = recorded_at or datetime.now()
+        return InspectionHistoryRecord(
+            recorded_at=recorded_at_value,
+            user_name=str(row.get("UserName") or ""),
+            product_name=str(row.get("ProductName") or ""),
+            recipe_name=str(row.get("RecipeName") or ""),
+            overall_status=str(row.get("OverallStatus") or ""),
+            plc_result_sent=str(row.get("PlcResultSent") or ""),
+            trigger_source=str(row.get("TriggerSource") or ""),
+            cycle_duration_ms=float(row.get("CycleDurationMs") or 0.0),
+            signal_summary=str(row.get("SignalSummary") or ""),
+            task_count=int(row.get("TaskCount") or 0),
+            ok_count=int(row.get("OkCount") or 0),
+            ng_count=int(row.get("NgCount") or 0),
+            message=str(row.get("Message") or ""),
+            artifact_dir=str(row.get("ArtifactDir") or ""),
         )
 
     def _merge_product_overlay(self, product: ProductRecord) -> ProductRecord:

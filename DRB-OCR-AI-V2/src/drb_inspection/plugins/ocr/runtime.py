@@ -10,6 +10,8 @@ class LegacyOcrPrediction:
     text: str
     error: str
     raw: object
+    boxes: object | None = None
+    box_points: object | None = None
 
 
 @dataclass
@@ -69,18 +71,22 @@ def _parse_prediction_result(raw_result: object) -> LegacyOcrPrediction:
 
     if isinstance(raw_result, tuple):
         if len(raw_result) >= 4:
-            _, text, _, error = raw_result[:4]
+            boxes, text, box_points, error = raw_result[:4]
             return LegacyOcrPrediction(
                 text="" if text is None else str(text),
                 error="" if error is None else str(error),
                 raw=raw_result,
+                boxes=boxes,
+                box_points=box_points,
             )
         if len(raw_result) >= 3:
-            _, text, _ = raw_result[:3]
+            boxes, text, box_points = raw_result[:3]
             return LegacyOcrPrediction(
                 text="" if text is None else str(text),
                 error="",
                 raw=raw_result,
+                boxes=boxes,
+                box_points=box_points,
             )
 
     return LegacyOcrPrediction(text=str(raw_result), error="", raw=raw_result)

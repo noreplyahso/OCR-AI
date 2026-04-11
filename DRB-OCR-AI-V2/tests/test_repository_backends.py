@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from datetime import datetime
 from dataclasses import dataclass, field
 
 from drb_inspection.adapters.db.base import RepositoryAdapter
 from drb_inspection.adapters.db.factory import build_repository
-from drb_inspection.adapters.db.models import DatabaseSettings, ProductRecord, RepositoryBackend, SessionRecord, UserRecord
+from drb_inspection.adapters.db.models import (
+    DatabaseSettings,
+    InspectionHistoryRecord,
+    ProductRecord,
+    RepositoryBackend,
+    SessionRecord,
+    UserRecord,
+)
 from drb_inspection.adapters.db.mysql import MySqlRepositoryAdapter
 
 
@@ -12,6 +20,7 @@ from drb_inspection.adapters.db.mysql import MySqlRepositoryAdapter
 class _FakeGateway:
     key_column: str
     rows: dict[object, dict] = field(default_factory=dict)
+    next_id: int = 1
 
     def get_all(self):
         return [dict(row) for row in self.rows.values()]
@@ -20,7 +29,13 @@ class _FakeGateway:
         return [dict(row) for row in self.rows.values() if row.get(column) == value]
 
     def insert(self, data: dict) -> None:
-        self.rows[data[self.key_column]] = dict(data)
+        record = dict(data)
+        key = record.get(self.key_column)
+        if key is None:
+            key = self.next_id
+            self.next_id += 1
+            record[self.key_column] = key
+        self.rows[key] = record
 
     def update(self, column: str, value, updates: dict) -> None:
         for key, row in list(self.rows.items()):
@@ -40,6 +55,28 @@ def test_build_repository_returns_in_memory_backend_by_default() -> None:
 
     assert isinstance(repository, RepositoryAdapter)
     assert not isinstance(repository, MySqlRepositoryAdapter)
+
+
+def test_in_memory_repository_roundtrips_recent_inspection_history() -> None:
+    repository = build_repository(backend=RepositoryBackend.MEMORY)
+    first = InspectionHistoryRecord(
+        recorded_at=datetime(2026, 4, 11, 9, 0, 0),
+        product_name="PRODUCT-A",
+        overall_status="pass",
+        plc_result_sent="OK",
+    )
+    second = InspectionHistoryRecord(
+        recorded_at=datetime(2026, 4, 11, 9, 1, 0),
+        product_name="PRODUCT-B",
+        overall_status="fail",
+        plc_result_sent="NG",
+    )
+
+    repository.save_inspection_history(first)
+    repository.save_inspection_history(second)
+    history = repository.list_recent_inspection_history(limit=10)
+
+    assert [entry.product_name for entry in history] == ["PRODUCT-B", "PRODUCT-A"]
 
 
 def test_mysql_repository_roundtrips_legacy_rows_and_v2_overlay_fields() -> None:
@@ -99,11 +136,13 @@ def test_mysql_repository_roundtrips_legacy_rows_and_v2_overlay_fields() -> None
             }
         },
     )
+    history_gateway = _FakeGateway(key_column="ID")
     repository = MySqlRepositoryAdapter(
         settings=DatabaseSettings(),
         users_gateway=users_gateway,
         products_gateway=products_gateway,
         session_gateway=session_gateway,
+        history_gateway=history_gateway,
     )
 
     repository.save_user(
@@ -176,3 +215,28 @@ def test_mysql_repository_roundtrips_legacy_rows_and_v2_overlay_fields() -> None
     assert session.image_width == 1280
     assert session.roi_x1 == 800
     assert session.roi_y5 == 1240
+
+    repository.save_inspection_history(
+        InspectionHistoryRecord(
+            recorded_at=datetime(2026, 4, 11, 10, 30, 0),
+            user_name="operator1",
+            product_name="PRODUCT-A",
+            recipe_name="inspection-PRODUCT-A",
+            overall_status="pass",
+            plc_result_sent="OK",
+            trigger_source="plc_grab",
+            cycle_duration_ms=12.5,
+            signal_summary="PLC signals: grab=1 stop=0 start=0",
+            task_count=5,
+            ok_count=5,
+            ng_count=0,
+            artifact_dir="C:/artifacts/1",
+        )
+    )
+    history = repository.list_recent_inspection_history(limit=5)
+
+    assert len(history) == 1
+    assert history[0].product_name == "PRODUCT-A"
+    assert history[0].artifact_dir == "C:/artifacts/1"
+    assert history[0].trigger_source == "plc_grab"
+    assert history[0].cycle_duration_ms == 12.5

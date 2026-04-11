@@ -23,6 +23,9 @@ class OcrPlugin:
         expected_text = str(request.parameters.get("expected_text", ""))
         detected_text = str(request.parameters.get("detected_text", ""))
         roi_rect = request.parameters.get("roi_rect")
+        acceptance_threshold = float(request.parameters.get("acceptance_threshold", 0.8))
+        duplication_threshold = float(request.parameters.get("duplication_threshold", 0.5))
+        row_threshold = float(request.parameters.get("row_threshold", 20))
         if detected_text:
             return self._build_text_result(
                 request=request,
@@ -30,6 +33,13 @@ class OcrPlugin:
                 expected_text=expected_text,
                 roi_rect=roi_rect,
                 roi_image=None,
+                raw_result=None,
+                error="",
+                detection_boxes=None,
+                detection_points=None,
+                acceptance_threshold=acceptance_threshold,
+                duplication_threshold=duplication_threshold,
+                row_threshold=row_threshold,
             )
 
         try:
@@ -51,6 +61,10 @@ class OcrPlugin:
             )
         model_path = request.parameters.get("model_path")
         detected_text = ""
+        prediction_raw = None
+        prediction_error = ""
+        prediction_boxes = None
+        prediction_points = None
 
         if self.runtime_gateway and image is not None and model_path:
             resolved_model_path = str(model_path)
@@ -60,10 +74,14 @@ class OcrPlugin:
             prediction = self.runtime_gateway.predict(
                 image,
                 self.model_handle,
-                acceptance_threshold=float(request.parameters.get("acceptance_threshold", 0.8)),
-                duplication_threshold=float(request.parameters.get("duplication_threshold", 0.5)),
-                row_threshold=float(request.parameters.get("row_threshold", 0.2)),
+                acceptance_threshold=acceptance_threshold,
+                duplication_threshold=duplication_threshold,
+                row_threshold=row_threshold,
             )
+            prediction_raw = prediction.raw
+            prediction_error = prediction.error
+            prediction_boxes = getattr(prediction, "boxes", None)
+            prediction_points = getattr(prediction, "box_points", None)
             if prediction.error == "exception: stack overflow":
                 return InspectionTaskResult(
                     task_id=request.task_id,
@@ -75,6 +93,11 @@ class OcrPlugin:
                         "text": prediction.text,
                         "raw_result": prediction.raw,
                         "error": prediction.error,
+                        "detection_boxes": prediction_boxes,
+                        "detection_points": prediction_points,
+                        "acceptance_threshold": acceptance_threshold,
+                        "duplication_threshold": duplication_threshold,
+                        "row_threshold": row_threshold,
                         "roi_name": request.roi_name,
                         "roi_rect": roi_rect,
                         "roi_image": image,
@@ -132,6 +155,13 @@ class OcrPlugin:
             expected_text=expected_text,
             roi_rect=roi_rect,
             roi_image=image,
+            raw_result=prediction_raw,
+            error=prediction_error,
+            detection_boxes=prediction_boxes,
+            detection_points=prediction_points,
+            acceptance_threshold=acceptance_threshold,
+            duplication_threshold=duplication_threshold,
+            row_threshold=row_threshold,
         )
 
     def _build_text_result(
@@ -142,6 +172,13 @@ class OcrPlugin:
         expected_text: str,
         roi_rect,
         roi_image,
+        raw_result,
+        error: str,
+        detection_boxes,
+        detection_points,
+        acceptance_threshold: float,
+        duplication_threshold: float,
+        row_threshold: float,
     ) -> InspectionTaskResult:
         if expected_text:
             match_result = match_expected_text(detected_text, expected_text)
@@ -155,6 +192,15 @@ class OcrPlugin:
                     "text": detected_text,
                     "matched_text": match_result.canonical_text,
                     "expected_text": expected_text,
+                    "matched_variant": match_result.matched_variant,
+                    "match_mode": match_result.match_mode,
+                    "raw_result": raw_result,
+                    "error": error,
+                    "detection_boxes": detection_boxes,
+                    "detection_points": detection_points,
+                    "acceptance_threshold": acceptance_threshold,
+                    "duplication_threshold": duplication_threshold,
+                    "row_threshold": row_threshold,
                     "roi_name": request.roi_name,
                     "roi_rect": roi_rect,
                     "roi_image": roi_image,
@@ -171,6 +217,15 @@ class OcrPlugin:
                 "text": detected_text,
                 "matched_text": "",
                 "expected_text": expected_text,
+                "matched_variant": "",
+                "match_mode": "",
+                "raw_result": raw_result,
+                "error": error,
+                "detection_boxes": detection_boxes,
+                "detection_points": detection_points,
+                "acceptance_threshold": acceptance_threshold,
+                "duplication_threshold": duplication_threshold,
+                "row_threshold": row_threshold,
                 "roi_name": request.roi_name,
                 "roi_rect": roi_rect,
                 "roi_image": roi_image,

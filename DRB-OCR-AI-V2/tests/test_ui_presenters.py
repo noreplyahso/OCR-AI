@@ -1,4 +1,6 @@
-from drb_inspection.adapters.db.models import ProductRecord, UserRecord
+from datetime import datetime
+
+from drb_inspection.adapters.db.models import InspectionHistoryRecord, ProductRecord, UserRecord
 from drb_inspection.adapters.plc.models import PlcReadState
 from drb_inspection.app.container import build_container
 from drb_inspection.app.settings import AppRuntimeSettings
@@ -76,6 +78,32 @@ def test_main_presenter_loads_state_from_application_use_cases() -> None:
     assert state.access_profile.can_run_cycle is True
     assert state.camera_connected is True
     assert state.plc_connected is True
+    assert state.recent_history_summaries == []
+
+
+def test_main_presenter_loads_recent_history_from_repository() -> None:
+    container = build_container()
+    _seed_main_screen_state(container)
+    container.repository.save_inspection_history(
+        InspectionHistoryRecord(
+            recorded_at=datetime(2026, 4, 11, 11, 5, 0),
+            user_name="admin",
+            product_name="PRODUCT-A",
+            overall_status="pass",
+            plc_result_sent="OK",
+            task_count=5,
+            ok_count=5,
+            ng_count=0,
+        )
+    )
+    presenter = _build_main_presenter(container)
+
+    state = presenter.load()
+
+    assert len(state.recent_history_summaries) == 1
+    assert "PRODUCT-A" in state.recent_history_summaries[0]
+    assert "result=OK" in state.recent_history_summaries[0]
+    assert "trigger=<none>" in state.recent_history_summaries[0]
 
 
 def test_desktop_shell_launches_login_then_transitions_to_main_after_submit() -> None:
@@ -133,6 +161,8 @@ def test_main_presenter_can_run_cycle_for_selected_product() -> None:
     assert state.last_ok_count == 5
     assert state.last_ng_count == 0
     assert state.last_result_label == "OK"
+    assert state.last_trigger_source == "manual"
+    assert state.last_cycle_duration_ms >= 0.0
     assert state.inspection_total_count == 5
     assert state.inspection_counter_value == 5
     assert state.inspection_batch_value == 0

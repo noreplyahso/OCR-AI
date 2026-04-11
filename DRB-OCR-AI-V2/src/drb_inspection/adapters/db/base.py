@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from drb_inspection.adapters.db.models import ProductRecord, SessionRecord, UserRecord
+from drb_inspection.adapters.db.models import InspectionHistoryRecord, ProductRecord, SessionRecord, UserRecord
 
 
 @dataclass
@@ -11,6 +11,7 @@ class RepositoryAdapter:
     users: dict[str, UserRecord] = field(default_factory=dict)
     products: dict[str, ProductRecord] = field(default_factory=dict)
     session: SessionRecord = field(default_factory=SessionRecord)
+    inspection_history: list[InspectionHistoryRecord] = field(default_factory=list)
 
     def record_event(self, message: str) -> None:
         self.events.append(message)
@@ -80,3 +81,10 @@ class RepositoryAdapter:
             roi_y5=int(updates.get("roi_y5", self.session.roi_y5)),
         )
         return self.session
+
+    def save_inspection_history(self, entry: InspectionHistoryRecord) -> InspectionHistoryRecord:
+        self.inspection_history.insert(0, entry)
+        return entry
+
+    def list_recent_inspection_history(self, limit: int = 10) -> list[InspectionHistoryRecord]:
+        return list(self.inspection_history[: max(0, int(limit))])

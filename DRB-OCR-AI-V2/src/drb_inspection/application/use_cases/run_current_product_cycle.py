@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
+from drb_inspection.adapters.db.models import InspectionHistoryRecord
 from drb_inspection.adapters.db.base import RepositoryAdapter
 from drb_inspection.app.settings import AppRuntimeSettings
 from drb_inspection.application.contracts.inspection import InspectionCycleResult, InspectionTaskType
@@ -19,7 +21,13 @@ class RunCurrentProductCycleUseCase:
     runtime_settings: AppRuntimeSettings
     artifact_recorder: InspectionArtifactRecorder | None = None
 
-    def execute(self, *, record_results: bool | None = None) -> InspectionCycleResult:
+    def execute(
+        self,
+        *,
+        record_results: bool | None = None,
+        trigger_source: str = "manual",
+        signal_summary: str = "",
+    ) -> InspectionCycleResult:
         session = self.repository.get_session()
         product_name = session.product_name.strip()
         if not product_name:
@@ -44,6 +52,7 @@ class RunCurrentProductCycleUseCase:
                         "model_path": product.model_path,
                         "roi_rect": roi_rect,
                         "rotate_clockwise": True,
+                        "row_threshold": 20,
                         "acceptance_threshold": (
                             product.threshold_accept if product.threshold_accept is not None else 0.8
                         ),
@@ -60,6 +69,8 @@ class RunCurrentProductCycleUseCase:
             steps=steps,
         )
         cycle = self.perform_cycle.execute(recipe=recipe)
+        cycle.trigger_source = trigger_source
+        cycle.signal_summary = signal_summary
         should_record = self.runtime_settings.record_results_default if record_results is None else bool(record_results)
         if should_record and self.artifact_recorder is not None:
             cycle.artifacts = self.artifact_recorder.record_cycle(
@@ -67,9 +78,47 @@ class RunCurrentProductCycleUseCase:
                 session=session,
                 cycle_result=cycle,
             )
+        self.repository.save_inspection_history(
+            self._build_history_entry(
+                user_name=session.user_name,
+                product_name=product.product_name,
+                cycle=cycle,
+            )
+        )
         self.repository.record_event(
             f"Run current product cycle product={product.product_name} status={cycle.inspection.overall_status.value}"
         )
         if cycle.artifacts is not None:
             self.repository.record_event(f"Inspection artifacts saved root={cycle.artifacts.root_dir}")
         return cycle
+
+    def _build_history_entry(
+        self,
+        *,
+        user_name: str,
+        product_name: str,
+        cycle: InspectionCycleResult,
+    ) -> InspectionHistoryRecord:
+        task_count = len(cycle.inspection.task_results)
+        ok_count = sum(
+            1
+            for task_result in cycle.inspection.task_results
+            if task_result.status.value == "pass"
+        )
+        ng_count = max(0, task_count - ok_count)
+        return InspectionHistoryRecord(
+            recorded_at=datetime.now(),
+            user_name=user_name,
+            product_name=product_name,
+            recipe_name=cycle.inspection.recipe_name,
+            overall_status=cycle.inspection.overall_status.value,
+            plc_result_sent=cycle.plc_result_sent,
+            trigger_source=cycle.trigger_source,
+            cycle_duration_ms=cycle.duration_ms,
+            signal_summary=cycle.signal_summary,
+            task_count=task_count,
+            ok_count=ok_count,
+            ng_count=ng_count,
+            message=cycle.inspection.message,
+            artifact_dir=cycle.artifacts.root_dir if cycle.artifacts is not None else "",
+        )

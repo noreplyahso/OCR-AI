@@ -14,6 +14,7 @@ from drb_inspection.plugins.ocr.plugin import OcrPlugin
 class _FakeLegacyGateway:
     loaded_model_path: str | None = None
     load_count: int = 0
+    last_predict_kwargs: dict | None = None
 
     def load_model(self, model_path: str):
         self.loaded_model_path = model_path
@@ -21,10 +22,17 @@ class _FakeLegacyGateway:
         return {"model_path": model_path}
 
     def predict(self, image, model, **kwargs):
+        self.last_predict_kwargs = dict(kwargs)
         return type(
             "_Prediction",
             (),
-            {"text": "OCR-RESULT", "error": "", "raw": (None, "OCR-RESULT", None, "")},
+            {
+                "text": "OCR-RESULT",
+                "error": "",
+                "raw": ([["box-1"]], "OCR-RESULT", [["pt-1"]], ""),
+                "boxes": [["box-1"]],
+                "box_points": [["pt-1"]],
+            },
         )()
 
 
@@ -48,6 +56,9 @@ def test_ocr_plugin_uses_legacy_runtime_gateway_when_available() -> None:
     assert gateway.loaded_model_path == "models/ocr.pt"
     assert result.outputs["text"] == "OCR-RESULT"
     assert result.outputs["matched_text"] == "OCR-RESULT"
+    assert result.outputs["detection_boxes"] == [["box-1"]]
+    assert result.outputs["detection_points"] == [["pt-1"]]
+    assert result.outputs["row_threshold"] == 20.0
     assert result.status == TaskStatus.PASS
 
 
@@ -129,6 +140,27 @@ def test_ocr_plugin_accepts_explicit_detected_text_without_needing_roi_crop() ->
 
     assert result.status == TaskStatus.PASS
     assert result.outputs["matched_text"] == "PRODUCT-A"
+
+
+def test_ocr_plugin_marks_reverse_variant_match_for_legacy_text() -> None:
+    plugin = OcrPlugin()
+    request = InspectionTaskRequest(
+        task_id="ocr_reverse_variant",
+        task_type=InspectionTaskType.OCR,
+        image_ref="frame://demo",
+        roi_name="label_roi_1",
+        parameters={
+            "detected_text": "001-R53SI",
+            "expected_text": "IS35R-100",
+        },
+    )
+
+    result = plugin.run(request)
+
+    assert result.status == TaskStatus.PASS
+    assert result.outputs["matched_text"] == "IS35R-100"
+    assert result.outputs["match_mode"] == "reverse"
+    assert result.outputs["matched_variant"] == "001-R53SI"
 
 
 def test_ocr_plugin_returns_error_when_legacy_runtime_reports_stack_overflow() -> None:

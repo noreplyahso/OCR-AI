@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 
 from drb_inspection.adapters.camera.base import CameraAdapter
 from drb_inspection.adapters.plc.base import PlcAdapter
@@ -16,6 +17,7 @@ class PerformInspectionCycleUseCase:
     run_inspection: RunInspectionUseCase
 
     def execute(self, recipe: InspectionRecipe) -> InspectionCycleResult:
+        started_at = time.perf_counter()
         try:
             camera_connected = self.camera.is_connected()
             if not camera_connected:
@@ -33,6 +35,7 @@ class PerformInspectionCycleUseCase:
                 image_ref=None,
                 inspection=inspection_result,
                 plc_result_sent=plc_result,
+                duration_ms=(time.perf_counter() - started_at) * 1000.0,
             )
 
         if not camera_connected:
@@ -48,6 +51,7 @@ class PerformInspectionCycleUseCase:
                 image_ref=None,
                 inspection=inspection_result,
                 plc_result_sent=plc_result,
+                duration_ms=(time.perf_counter() - started_at) * 1000.0,
             )
 
         image_frame = self.camera.grab()
@@ -64,6 +68,7 @@ class PerformInspectionCycleUseCase:
                 image_ref=image_frame,
                 inspection=inspection_result,
                 plc_result_sent=plc_result,
+                duration_ms=(time.perf_counter() - started_at) * 1000.0,
             )
         inspection_result = self.run_inspection.execute(recipe=recipe, image_ref=image_frame)
         plc_result = "OK" if inspection_result.overall_status == TaskStatus.PASS else "NG"
@@ -72,4 +77,5 @@ class PerformInspectionCycleUseCase:
             image_ref=image_frame,
             inspection=inspection_result,
             plc_result_sent=plc_result,
+            duration_ms=(time.perf_counter() - started_at) * 1000.0,
         )

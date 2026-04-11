@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from drb_inspection.adapters.camera.models import ImageFrame
+from drb_inspection.adapters.db.models import InspectionHistoryRecord
 from drb_inspection.application.contracts.inspection import InspectionCycleResult
 from drb_inspection.application.contracts.runtime import RuntimeHardwareResult
 from drb_inspection.application.use_cases.connect_camera import ConnectCameraUseCase
@@ -34,6 +35,8 @@ class CycleRuntimeMetrics:
     last_ok_count: int = 0
     last_ng_count: int = 0
     last_result_label: str = ""
+    last_cycle_duration_ms: float = 0.0
+    last_trigger_source: str = ""
 
 
 @dataclass
@@ -108,11 +111,14 @@ class MainScreenPresenter:
             last_ok_count=self.cycle_metrics.last_ok_count,
             last_ng_count=self.cycle_metrics.last_ng_count,
             last_result_label=self.cycle_metrics.last_result_label,
+            last_cycle_duration_ms=self.cycle_metrics.last_cycle_duration_ms,
+            last_trigger_source=self.cycle_metrics.last_trigger_source,
             auto_mode_enabled=self.runtime_controls.auto_mode_enabled,
             inspection_enabled=self.runtime_controls.inspection_enabled,
             recording_enabled=self.runtime_controls.recording_enabled,
             artifact_summary=self.runtime_controls.artifact_summary,
             last_artifact_dir=self.runtime_controls.last_artifact_dir,
+            recent_history_summaries=self._build_history_summaries(context.recent_inspection_history),
         )
 
     def select_current_product(self, product_name: str) -> MainScreenState:
@@ -359,6 +365,10 @@ class MainScreenPresenter:
             f"Inspection cycle result: {cycle_result.plc_result_sent}"
             f" ({cycle_result.inspection.overall_status.value})"
         )
+        if cycle_result.trigger_source:
+            base = f"{base} | trigger={cycle_result.trigger_source}"
+        if cycle_result.duration_ms > 0:
+            base = f"{base} | duration={cycle_result.duration_ms:.1f} ms"
         if cycle_result.artifacts is not None:
             base = f"{base} | artifacts saved"
         if cycle_result.inspection.message:
@@ -413,8 +423,11 @@ class MainScreenPresenter:
                 "last_ok_count": self.cycle_metrics.last_ok_count,
                 "last_ng_count": self.cycle_metrics.last_ng_count,
                 "last_result_label": self.cycle_metrics.last_result_label,
+                "last_cycle_duration_ms": self.cycle_metrics.last_cycle_duration_ms,
+                "last_trigger_source": self.cycle_metrics.last_trigger_source,
                 "artifact_summary": self.runtime_controls.artifact_summary,
                 "last_artifact_dir": self.runtime_controls.last_artifact_dir,
+                "recent_history_summaries": state.recent_history_summaries,
                 "message": message,
             }
         )
@@ -450,6 +463,8 @@ class MainScreenPresenter:
         self.cycle_metrics.last_result_label = (
             "OK" if cycle_result.inspection.overall_status.value == "pass" else "FAIL"
         )
+        self.cycle_metrics.last_cycle_duration_ms = cycle_result.duration_ms
+        self.cycle_metrics.last_trigger_source = cycle_result.trigger_source
         self.cycle_metrics.total_count += quantity
         normalized_default = max(1, int(default_number or quantity or 1))
         self.cycle_metrics.counter_value = self.cycle_metrics.total_count % normalized_default
@@ -465,3 +480,20 @@ class MainScreenPresenter:
             return
         self.runtime_controls.artifact_summary = ""
         self.runtime_controls.last_artifact_dir = ""
+
+    def _build_history_summaries(self, history: list[InspectionHistoryRecord]) -> list[str]:
+        summaries: list[str] = []
+        for entry in history:
+            summaries.append(
+                f"[{entry.recorded_at.strftime('%H:%M:%S')}]"
+                f" {entry.product_name or '<no product>'}"
+                f" | result={entry.plc_result_sent or '<none>'}"
+                f" | status={entry.overall_status or '<none>'}"
+                f" | trigger={entry.trigger_source or '<none>'}"
+                f" | duration={entry.cycle_duration_ms:.1f} ms"
+                f" | qty={entry.task_count}"
+                f" | ok={entry.ok_count}"
+                f" | ng={entry.ng_count}"
+                f" | user={entry.user_name or '<none>'}"
+            )
+        return summaries

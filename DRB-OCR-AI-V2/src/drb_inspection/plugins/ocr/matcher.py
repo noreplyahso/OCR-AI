@@ -10,6 +10,8 @@ class OcrMatchResult:
     expected_text: str
     detected_text: str
     canonical_text: str
+    matched_variant: str = ""
+    match_mode: str = ""
 
 
 def match_expected_text(detected_text: str | None, expected_text: str | None) -> OcrMatchResult:
@@ -21,6 +23,8 @@ def match_expected_text(detected_text: str | None, expected_text: str | None) ->
             expected_text=expected,
             detected_text=detected,
             canonical_text="",
+            matched_variant="",
+            match_mode="",
         )
 
     if _pattern_for_text(expected).search(detected):
@@ -29,6 +33,8 @@ def match_expected_text(detected_text: str | None, expected_text: str | None) ->
             expected_text=expected,
             detected_text=detected,
             canonical_text=expected,
+            matched_variant=expected,
+            match_mode="forward",
         )
 
     for reverse_variant in _reverse_variants(expected):
@@ -38,6 +44,8 @@ def match_expected_text(detected_text: str | None, expected_text: str | None) ->
                 expected_text=expected,
                 detected_text=detected,
                 canonical_text=expected,
+                matched_variant=reverse_variant,
+                match_mode="reverse",
             )
 
     return OcrMatchResult(
@@ -45,6 +53,8 @@ def match_expected_text(detected_text: str | None, expected_text: str | None) ->
         expected_text=expected,
         detected_text=detected,
         canonical_text="",
+        matched_variant="",
+        match_mode="",
     )
 
 

@@ -64,6 +64,8 @@ class MainScreenWidget(QWidget):
         self.counter_summary_label.setObjectName("mutedLabel")
         self.result_summary_label = QLabel("Result: <none> | OK: 0 | NG: 0")
         self.result_summary_label.setObjectName("mutedLabel")
+        self.cycle_meta_label = QLabel("Cycle: trigger=<none> | duration=0.0 ms")
+        self.cycle_meta_label.setObjectName("mutedLabel")
         self.artifact_summary_label = QLabel("Artifacts: not saved")
         self.artifact_summary_label.setObjectName("mutedLabel")
         self.artifact_summary_label.setWordWrap(True)
@@ -77,6 +79,8 @@ class MainScreenWidget(QWidget):
         self.roi_summary_label.setWordWrap(True)
         self.task_results_view = QTextEdit()
         self.task_results_view.setReadOnly(True)
+        self.history_results_view = QTextEdit()
+        self.history_results_view.setReadOnly(True)
         self.catalog_path_edit = QLineEdit()
         self.product_combo = QComboBox()
         self.model_path_edit = QLineEdit()
@@ -189,6 +193,11 @@ class MainScreenWidget(QWidget):
             f" | OK: {state.last_ok_count}"
             f" | NG: {state.last_ng_count}"
         )
+        self.cycle_meta_label.setText(
+            "Cycle:"
+            f" trigger={state.last_trigger_source or '<none>'}"
+            f" | duration={state.last_cycle_duration_ms:.1f} ms"
+        )
         self.artifact_summary_label.setText(state.artifact_summary or "Artifacts: not saved")
         self.model_path_edit.setText(state.model_path)
         self.default_number_spin.setValue(int(state.default_number or 0))
@@ -199,6 +208,11 @@ class MainScreenWidget(QWidget):
         self.roi_summary_label.setText(state.roi_summary or "ROIs: none")
         self.task_results_view.setPlainText(
             "\n".join(state.task_summaries) if state.task_summaries else "No inspection cycle executed yet."
+        )
+        self.history_results_view.setPlainText(
+            "\n".join(state.recent_history_summaries)
+            if state.recent_history_summaries
+            else "No cycle history recorded yet."
         )
         self.preview_label.setPixmap(build_preview_pixmap(
             state.preview_frame.frame if state.preview_frame is not None else None,
@@ -304,6 +318,7 @@ class MainScreenWidget(QWidget):
         runtime_layout.addWidget(self.idle_shutdown_label)
         runtime_layout.addWidget(self.counter_summary_label)
         runtime_layout.addWidget(self.result_summary_label)
+        runtime_layout.addWidget(self.cycle_meta_label)
         runtime_layout.addWidget(self.artifact_summary_label)
         runtime_layout.addWidget(self.cycle_status_label)
         runtime_layout.addWidget(self.preview_label, alignment=Qt.AlignCenter)
@@ -336,6 +351,10 @@ class MainScreenWidget(QWidget):
         task_title.setObjectName("sectionTitle")
         runtime_layout.addWidget(task_title)
         runtime_layout.addWidget(self.task_results_view)
+        history_title = QLabel("Recent Cycle History")
+        history_title.setObjectName("sectionTitle")
+        runtime_layout.addWidget(history_title)
+        runtime_layout.addWidget(self.history_results_view)
         self.runtime_card.setLayout(runtime_layout)
         body.addWidget(self.runtime_card, 3)
 
@@ -421,6 +440,7 @@ class MainScreenWidget(QWidget):
         self.plc_protocol_combo.addItems(["modbus_tcp", "modbus_rtu", "slmp"])
         self.preview_label.setMinimumSize(520, 300)
         self.task_results_view.setMinimumHeight(180)
+        self.history_results_view.setMinimumHeight(140)
 
     def _connect_events(self) -> None:
         self.product_combo.currentTextChanged.connect(self._on_product_changed)

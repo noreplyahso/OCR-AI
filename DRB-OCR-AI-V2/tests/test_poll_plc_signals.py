@@ -16,7 +16,7 @@ from drb_inspection.application.contracts.inspection import (
 class FakeRunCurrentProductCycle:
     calls: int = 0
 
-    def execute(self) -> InspectionCycleResult:
+    def execute(self, **kwargs) -> InspectionCycleResult:
         self.calls += 1
         return InspectionCycleResult(
             image_ref=None,
@@ -27,6 +27,8 @@ class FakeRunCurrentProductCycle:
                 message="cycle ok",
             ),
             plc_result_sent="OK",
+            trigger_source=str(kwargs.get("trigger_source") or "manual"),
+            signal_summary=str(kwargs.get("signal_summary") or ""),
         )
 
 
@@ -61,6 +63,8 @@ def test_poll_plc_signals_triggers_cycle_on_grab_rising_edge() -> None:
 
     assert first.action == "grab"
     assert first.cycle_result is not None
+    assert first.cycle_result.trigger_source == "plc_grab"
+    assert first.cycle_result.signal_summary == "PLC signals: grab=1 stop=0 start=0"
     assert run_cycle.calls == 1
     assert second.action == "idle"
 
