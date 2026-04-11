@@ -99,10 +99,15 @@ class RunCurrentProductCycleUseCase:
         product_name: str,
         cycle: InspectionCycleResult,
     ) -> InspectionHistoryRecord:
-        task_count = len(cycle.inspection.task_results)
+        counted_results = [
+            task_result
+            for task_result in cycle.inspection.task_results
+            if self._task_counted_for_history(task_result)
+        ]
+        task_count = len(counted_results)
         ok_count = sum(
             1
-            for task_result in cycle.inspection.task_results
+            for task_result in counted_results
             if task_result.status.value == "pass"
         )
         ng_count = max(0, task_count - ok_count)
@@ -122,3 +127,12 @@ class RunCurrentProductCycleUseCase:
             message=cycle.inspection.message,
             artifact_dir=cycle.artifacts.root_dir if cycle.artifacts is not None else "",
         )
+
+    def _task_counted_for_history(self, task_result) -> bool:
+        if task_result.task_type.value != "ocr":
+            return True
+        counted = task_result.outputs.get("counted_quantity")
+        if isinstance(counted, bool):
+            return counted
+        text = str(task_result.outputs.get("text", "")).strip()
+        return bool(text)

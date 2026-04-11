@@ -9,6 +9,7 @@ from typing import Any, Sequence
 from drb_inspection.adapters.db.models import SessionRecord
 from drb_inspection.application.contracts.inspection import (
     InspectionCycleArtifacts,
+    InspectionTaskResult,
     InspectionCycleResult,
     InspectionTaskArtifact,
 )
@@ -33,9 +34,15 @@ class InspectionArtifactRecorder:
         )
         cycle_dir.mkdir(parents=True, exist_ok=True)
 
+        source_frame = getattr(cycle_result.image_ref, "frame", cycle_result.image_ref)
         frame_path = self._try_save_image(
             cycle_dir / "frame",
-            getattr(cycle_result.image_ref, "frame", cycle_result.image_ref),
+            source_frame,
+        )
+        annotated_frame_path = self._try_save_annotated_frame(
+            cycle_dir / "frame_annotated.png",
+            source_frame,
+            cycle_result.inspection.task_results,
         )
         task_artifacts = self._record_task_artifacts(
             task_results=cycle_result.inspection.task_results,
@@ -50,6 +57,7 @@ class InspectionArtifactRecorder:
                     cycle_result=cycle_result,
                     timestamp=timestamp,
                     frame_path=frame_path,
+                    annotated_frame_path=annotated_frame_path,
                     task_artifacts=task_artifacts,
                 ),
                 indent=2,
@@ -61,6 +69,7 @@ class InspectionArtifactRecorder:
             root_dir=str(cycle_dir),
             summary_path=str(summary_path),
             frame_path=str(frame_path) if frame_path else "",
+            annotated_frame_path=str(annotated_frame_path) if annotated_frame_path else "",
             task_artifacts=task_artifacts,
         )
 
@@ -83,17 +92,26 @@ class InspectionArtifactRecorder:
     ) -> list[InspectionTaskArtifact]:
         artifacts: list[InspectionTaskArtifact] = []
         for index, task_result in enumerate(task_results, start=1):
+            task_slug = self._slug(task_result.task_id)
             roi_image = task_result.outputs.get("roi_image")
             image_path = self._try_save_image(
-                cycle_dir / f"task_{index:02d}_{self._slug(task_result.task_id)}_roi",
+                cycle_dir / f"task_{index:02d}_{task_slug}_roi",
                 roi_image,
             )
-            if image_path is None:
-                continue
+            debug_path = cycle_dir / f"task_{index:02d}_{task_slug}_debug.json"
+            debug_path.write_text(
+                json.dumps(
+                    self._build_task_debug_payload(task_result, image_path=image_path),
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
             artifacts.append(
                 InspectionTaskArtifact(
                     task_id=task_result.task_id,
-                    image_path=str(image_path),
+                    image_path=str(image_path) if image_path else "",
+                    debug_path=str(debug_path),
                 )
             )
         return artifacts
@@ -106,10 +124,15 @@ class InspectionArtifactRecorder:
         cycle_result: InspectionCycleResult,
         timestamp: datetime,
         frame_path: Path | None,
+        annotated_frame_path: Path | None,
         task_artifacts: list[InspectionTaskArtifact],
     ) -> dict[str, object]:
         artifact_path_by_task = {
             artifact.task_id: artifact.image_path
+            for artifact in task_artifacts
+        }
+        debug_path_by_task = {
+            artifact.task_id: artifact.debug_path
             for artifact in task_artifacts
         }
         return {
@@ -120,6 +143,7 @@ class InspectionArtifactRecorder:
             "plc_result_sent": cycle_result.plc_result_sent,
             "message": cycle_result.inspection.message,
             "frame_path": str(frame_path) if frame_path else "",
+            "annotated_frame_path": str(annotated_frame_path) if annotated_frame_path else "",
             "session": {
                 "offset_x": session.offset_x,
                 "offset_y": session.offset_y,
@@ -136,9 +160,31 @@ class InspectionArtifactRecorder:
                     "message": task_result.message,
                     "outputs": self._sanitize_outputs(task_result.outputs),
                     "artifact_path": artifact_path_by_task.get(task_result.task_id, ""),
+                    "debug_path": debug_path_by_task.get(task_result.task_id, ""),
                 }
                 for task_result in cycle_result.inspection.task_results
             ],
+        }
+
+    def _build_task_debug_payload(
+        self,
+        task_result: InspectionTaskResult,
+        *,
+        image_path: Path | None,
+    ) -> dict[str, object]:
+        outputs = self._sanitize_outputs(task_result.outputs)
+        raw_result = task_result.outputs.get("raw_result")
+        return {
+            "task_id": task_result.task_id,
+            "task_type": task_result.task_type.value,
+            "status": task_result.status.value,
+            "score": task_result.score,
+            "message": task_result.message,
+            "roi_name": task_result.outputs.get("roi_name", ""),
+            "roi_rect": outputs.get("roi_rect", []),
+            "image_path": str(image_path) if image_path else "",
+            "raw_summary": self._summarize_raw_result(raw_result),
+            "outputs": outputs,
         }
 
     def _sanitize_outputs(self, outputs: dict[str, object]) -> dict[str, object]:
@@ -158,6 +204,177 @@ class InspectionArtifactRecorder:
             sanitized[key] = str(value)
         return sanitized
 
+    def _summarize_raw_result(self, value: object) -> str:
+        if value is None:
+            return "<none>"
+        if isinstance(value, tuple):
+            return f"tuple[{len(value)}]"
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return f"seq[{len(value)}]"
+        text = str(value).strip()
+        return text or "<none>"
+
+    def _try_save_annotated_frame(
+        self,
+        path: Path,
+        image: Any,
+        task_results: Sequence[InspectionTaskResult],
+    ) -> Path | None:
+        qimage = self._build_qimage_from_array(image)
+        annotations = self._build_task_annotations(task_results)
+        if qimage is not None:
+            try:
+                from PyQt5.QtGui import QFont, QPainter, QPen
+
+                annotated = qimage.copy()
+                painter = QPainter(annotated)
+                painter.setRenderHint(QPainter.Antialiasing)
+                line_width = max(2, int(max(1, annotated.width()) / 500))
+                label_font = QFont("Segoe UI", max(10, int(max(1, annotated.width()) / 95)))
+                label_font.setBold(True)
+                painter.setFont(label_font)
+                for index, annotation in enumerate(annotations, start=1):
+                    x_value, y_value, rect_width, rect_height = annotation["roi_rect"]
+                    painter.setPen(QPen(self._annotation_color(annotation["status"]), line_width))
+                    painter.drawRect(int(x_value), int(y_value), int(rect_width), int(rect_height))
+                    painter.drawText(
+                        int(x_value),
+                        max(28, int(y_value) - 12),
+                        annotation["label"] or f"ROI {index}",
+                    )
+                painter.end()
+                if not annotated.save(str(path), "PNG"):
+                    return None
+                return path
+            except Exception:
+                pass
+        rows = self._normalize_rows(image)
+        if not rows:
+            return None
+        annotated_rows = self._draw_annotations_on_rows(rows, annotations)
+        first_row = annotated_rows[0]
+        if not first_row:
+            return None
+        if isinstance(first_row[0], Sequence) and not isinstance(first_row[0], (str, bytes, bytearray)):
+            fallback_path = path.with_suffix(".ppm")
+            self._write_ppm(fallback_path, annotated_rows)
+            return fallback_path
+        fallback_path = path.with_suffix(".pgm")
+        self._write_pgm(fallback_path, annotated_rows)
+        return fallback_path
+
+    def _build_task_annotations(
+        self,
+        task_results: Sequence[InspectionTaskResult],
+    ) -> list[dict[str, object]]:
+        annotations: list[dict[str, object]] = []
+        for task_result in task_results:
+            roi_rect = task_result.outputs.get("roi_rect")
+            if not isinstance(roi_rect, (list, tuple)) or len(roi_rect) < 4:
+                continue
+            annotations.append(
+                {
+                    "roi_rect": (
+                        int(roi_rect[0]),
+                        int(roi_rect[1]),
+                        int(roi_rect[2]),
+                        int(roi_rect[3]),
+                    ),
+                    "label": self._build_annotation_label(task_result),
+                    "status": task_result.status.value,
+                }
+            )
+        return annotations
+
+    def _build_annotation_label(self, task_result: InspectionTaskResult) -> str:
+        outputs = task_result.outputs
+        if task_result.task_type.value != "ocr":
+            return (
+                str(outputs.get("matched_text", "")).strip()
+                or str(outputs.get("text", "")).strip()
+                or str(outputs.get("expected_text", "")).strip()
+                or str(outputs.get("roi_name", "")).strip()
+                or task_result.task_id
+            )
+        if task_result.status.value == "pass":
+            return (
+                str(outputs.get("matched_text", "")).strip()
+                or str(outputs.get("expected_text", "")).strip()
+                or str(outputs.get("text", "")).strip()
+            )
+        return ""
+
+    def _annotation_color(self, status: str):
+        from PyQt5.QtGui import QColor
+
+        normalized = (status or "").strip().lower()
+        if normalized == "pass":
+            return QColor("#00b050")
+        if normalized == "fail":
+            return QColor("#ff3b30")
+        if normalized == "error":
+            return QColor("#ff9500")
+        return QColor("#38c172")
+
+    def _draw_annotations_on_rows(
+        self,
+        rows: list[list[Any]],
+        annotations: Sequence[dict[str, object]],
+    ) -> list[list[Any]]:
+        annotated_rows = self._copy_rows(rows)
+        if not annotated_rows or not annotated_rows[0]:
+            return annotated_rows
+        height = len(annotated_rows)
+        width = len(annotated_rows[0])
+        rgb_mode = isinstance(annotated_rows[0][0], Sequence) and not isinstance(
+            annotated_rows[0][0],
+            (str, bytes, bytearray),
+        )
+        for annotation in annotations:
+            x_value, y_value, rect_width, rect_height = annotation["roi_rect"]
+            color = self._annotation_channels(str(annotation["status"]), rgb_mode=rgb_mode)
+            left = max(0, int(x_value))
+            top = max(0, int(y_value))
+            right = min(width - 1, max(left, int(x_value) + int(rect_width) - 1))
+            bottom = min(height - 1, max(top, int(y_value) + int(rect_height) - 1))
+            for x_index in range(left, right + 1):
+                annotated_rows[top][x_index] = color
+                annotated_rows[bottom][x_index] = color
+            for y_index in range(top, bottom + 1):
+                annotated_rows[y_index][left] = color
+                annotated_rows[y_index][right] = color
+        return annotated_rows
+
+    def _copy_rows(self, rows: list[list[Any]]) -> list[list[Any]]:
+        copied_rows: list[list[Any]] = []
+        for row in rows:
+            copied_row: list[Any] = []
+            for value in row:
+                if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+                    copied_row.append(list(value))
+                else:
+                    copied_row.append(value)
+            copied_rows.append(copied_row)
+        return copied_rows
+
+    def _annotation_channels(self, status: str, *, rgb_mode: bool) -> Any:
+        normalized = (status or "").strip().lower()
+        if rgb_mode:
+            if normalized == "pass":
+                return [0, 176, 80]
+            if normalized == "fail":
+                return [255, 59, 48]
+            if normalized == "error":
+                return [255, 149, 0]
+            return [56, 193, 114]
+        if normalized == "pass":
+            return 255
+        if normalized == "fail":
+            return 192
+        if normalized == "error":
+            return 224
+        return 160
+
     def _try_save_image(self, target_base: Path, image: Any) -> Path | None:
         if image is None or isinstance(image, str):
             return None
@@ -167,6 +384,17 @@ class InspectionArtifactRecorder:
         return self._try_save_plain_portable_image(target_base, image)
 
     def _try_save_qimage(self, path: Path, image: Any) -> Path | None:
+        qimage = self._build_qimage_from_array(image)
+        if qimage is None:
+            return None
+        try:
+            if not qimage.copy().save(str(path), "PNG"):
+                return None
+            return path
+        except Exception:
+            return None
+
+    def _build_qimage_from_array(self, image: Any):
         shape = getattr(image, "shape", None)
         data = getattr(image, "data", None)
         strides = getattr(image, "strides", None)
@@ -177,26 +405,22 @@ class InspectionArtifactRecorder:
             from PyQt5.QtGui import QImage
 
             if len(shape) == 2:
-                qimage = QImage(
+                return QImage(
                     image.data,
                     int(shape[1]),
                     int(shape[0]),
                     int(image.strides[0]),
                     QImage.Format_Grayscale8,
                 )
-            elif len(shape) == 3 and int(shape[2]) == 3:
-                qimage = QImage(
+            if len(shape) == 3 and int(shape[2]) == 3:
+                return QImage(
                     image.data,
                     int(shape[1]),
                     int(shape[0]),
                     int(image.strides[0]),
                     QImage.Format_RGB888,
                 )
-            else:
-                return None
-            if not qimage.copy().save(str(path), "PNG"):
-                return None
-            return path
+            return None
         except Exception:
             return None
 

@@ -128,7 +128,11 @@ def test_run_current_product_cycle_records_artifacts_when_enabled(tmp_path: Path
     assert result.artifacts is not None
     assert Path(result.artifacts.summary_path).exists()
     assert Path(result.artifacts.frame_path).exists()
+    assert result.artifacts.annotated_frame_path
+    assert Path(result.artifacts.annotated_frame_path).exists()
     assert len(result.artifacts.task_artifacts) == 1
+    assert result.artifacts.task_artifacts[0].debug_path
+    assert Path(result.artifacts.task_artifacts[0].debug_path).exists()
     assert result.trigger_source == "manual"
 
 
@@ -152,3 +156,52 @@ def test_run_current_product_cycle_persists_history_entry_to_repository() -> Non
     assert history[0].task_count == 5
     assert history[0].trigger_source == "manual"
     assert history[0].cycle_duration_ms >= 0.0
+
+
+def test_run_current_product_cycle_does_not_count_skipped_ocr_in_history() -> None:
+    container = build_container(runtime_settings=AppRuntimeSettings(demo_mode=False))
+    container.repository.upsert_product(
+        ProductRecord(
+            product_name="PRODUCT-S",
+            model_path="models/product_s.pt",
+        )
+    )
+    container.repository.update_session(user_name="admin", product_name="PRODUCT-S")
+
+    @dataclass
+    class _SkippedPerformCycle:
+        def execute(self, recipe):
+            return InspectionCycleResult(
+                image_ref=ImageFrame(frame=[[0, 1], [2, 3]], capture_seconds=0.01),
+                inspection=InspectionRunResult(
+                    recipe_name=recipe.name,
+                    overall_status=TaskStatus.PASS,
+                    task_results=[
+                        InspectionTaskResult(
+                            task_id="ocr_label_1",
+                            task_type=InspectionTaskType.OCR,
+                            status=TaskStatus.SKIPPED,
+                            message="OCR text was empty for expected product.",
+                            outputs={
+                                "text": "",
+                                "expected_text": "PRODUCT-S",
+                                "counted_quantity": False,
+                            },
+                        )
+                    ],
+                    message="",
+                ),
+                plc_result_sent="OK",
+            )
+
+    container.run_current_product_cycle.perform_cycle = _SkippedPerformCycle()
+
+    result = container.run_current_product_cycle.execute()
+    history = container.repository.list_recent_inspection_history(limit=1)
+
+    assert result.plc_result_sent == "OK"
+    assert len(history) == 1
+    assert history[0].overall_status == "pass"
+    assert history[0].task_count == 0
+    assert history[0].ok_count == 0
+    assert history[0].ng_count == 0

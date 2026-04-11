@@ -6,6 +6,9 @@ from drb_inspection.application.contracts.inspection import TaskStatus
 from drb_inspection.application.services.recipe_loader import RecipeLoader
 from drb_inspection.domain.inspection.models import InspectionRecipe, RecipeStep
 from drb_inspection.application.contracts.inspection import InspectionTaskType
+from drb_inspection.domain.inspection.pipeline import InspectionPipeline
+from drb_inspection.plugins.registry import PluginRegistry
+from drb_inspection.workers.local_ai_worker import LocalAiWorker
 
 
 def test_pipeline_runs_recipe_and_returns_pass_summary() -> None:
@@ -79,3 +82,45 @@ def test_pipeline_propagates_error_for_required_step() -> None:
 
     assert run_result.overall_status == TaskStatus.ERROR
     assert run_result.task_results[0].status == TaskStatus.ERROR
+
+
+def test_pipeline_treats_required_skipped_step_as_neutral() -> None:
+    class _SkipPlugin:
+        def run(self, request):
+            return request.__class__.__mro__[0]  # pragma: no cover
+
+    class _RequiredSkipPlugin:
+        def run(self, request):
+            from drb_inspection.application.contracts.inspection import InspectionTaskResult
+
+            return InspectionTaskResult(
+                task_id=request.task_id,
+                task_type=request.task_type,
+                status=TaskStatus.SKIPPED,
+                message="OCR text was empty.",
+                outputs={"counted_quantity": False, "text": ""},
+            )
+
+    recipe = InspectionRecipe(
+        name="required-skip",
+        version=1,
+        steps=[
+            RecipeStep(
+                step_id="ocr_skip",
+                plugin="skip",
+                task_type=InspectionTaskType.OCR,
+                roi_name="label_roi",
+                required=True,
+                parameters={},
+            )
+        ],
+    )
+    pipeline = InspectionPipeline(
+        worker=LocalAiWorker(),
+        plugin_registry=PluginRegistry({"skip": _RequiredSkipPlugin()}),
+    )
+
+    run_result = pipeline.run(recipe=recipe, image_ref="frame://test")
+
+    assert run_result.overall_status == TaskStatus.PASS
+    assert run_result.task_results[0].status == TaskStatus.SKIPPED

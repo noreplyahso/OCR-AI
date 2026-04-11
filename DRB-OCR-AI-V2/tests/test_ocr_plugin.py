@@ -56,6 +56,10 @@ def test_ocr_plugin_uses_legacy_runtime_gateway_when_available() -> None:
     assert gateway.loaded_model_path == "models/ocr.pt"
     assert result.outputs["text"] == "OCR-RESULT"
     assert result.outputs["matched_text"] == "OCR-RESULT"
+    assert result.outputs["match_mode"] == "forward"
+    assert result.outputs["matched_variant"] == "OCR-RESULT"
+    assert result.outputs["reason"] == "text_match"
+    assert result.outputs["source"] == "runtime"
     assert result.outputs["detection_boxes"] == [["box-1"]]
     assert result.outputs["detection_points"] == [["pt-1"]]
     assert result.outputs["row_threshold"] == 20.0
@@ -140,6 +144,8 @@ def test_ocr_plugin_accepts_explicit_detected_text_without_needing_roi_crop() ->
 
     assert result.status == TaskStatus.PASS
     assert result.outputs["matched_text"] == "PRODUCT-A"
+    assert result.outputs["reason"] == "text_match"
+    assert result.outputs["source"] == "detected_override"
 
 
 def test_ocr_plugin_marks_reverse_variant_match_for_legacy_text() -> None:
@@ -161,6 +167,103 @@ def test_ocr_plugin_marks_reverse_variant_match_for_legacy_text() -> None:
     assert result.outputs["matched_text"] == "IS35R-100"
     assert result.outputs["match_mode"] == "reverse"
     assert result.outputs["matched_variant"] == "001-R53SI"
+    assert result.outputs["reason"] == "text_match"
+    assert result.outputs["source"] == "detected_override"
+
+
+def test_ocr_plugin_marks_expected_text_empty_as_skipped() -> None:
+    gateway = _FakeLegacyGateway()
+    gateway.predict = lambda *args, **kwargs: type(
+        "_Prediction",
+        (),
+        {"text": "", "error": "", "raw": ([["box-1"]], "", [["pt-1"]], "")},
+    )()
+    plugin = OcrPlugin(runtime_gateway=gateway)
+    request = InspectionTaskRequest(
+        task_id="ocr_empty_text",
+        task_type=InspectionTaskType.OCR,
+        image_ref="frame://runtime",
+        roi_name="label_roi",
+        parameters={
+            "image": object(),
+            "model_path": "models/ocr.pt",
+            "expected_text": "IS35R-100",
+        },
+    )
+
+    result = plugin.run(request)
+
+    assert result.status == TaskStatus.SKIPPED
+    assert "empty" in result.message.lower()
+    assert result.outputs["reason"] == "empty_text"
+    assert result.outputs["error"] == ""
+    assert result.outputs["source"] == "runtime"
+    assert result.outputs["has_text"] is False
+    assert result.outputs["counted_quantity"] is False
+
+
+def test_ocr_plugin_returns_error_when_legacy_runtime_reports_generic_error_without_text() -> None:
+    gateway = _FakeLegacyGateway()
+    gateway.predict = lambda *args, **kwargs: type(
+        "_Prediction",
+        (),
+        {"text": "", "error": "gpu unavailable", "raw": ([["box-1"]], "", [["pt-1"]], "gpu unavailable")},
+    )()
+    plugin = OcrPlugin(runtime_gateway=gateway)
+    request = InspectionTaskRequest(
+        task_id="ocr_runtime_error",
+        task_type=InspectionTaskType.OCR,
+        image_ref="frame://runtime",
+        roi_name="label_roi",
+        parameters={
+            "image": object(),
+            "model_path": "models/ocr.pt",
+            "expected_text": "IS35R-100",
+        },
+    )
+
+    result = plugin.run(request)
+
+    assert result.status == TaskStatus.ERROR
+    assert "gpu unavailable" in result.message
+    assert result.outputs["reason"] == "runtime_error"
+    assert result.outputs["error"] == "gpu unavailable"
+    assert result.outputs["source"] == "runtime"
+
+
+def test_ocr_plugin_keeps_text_result_and_surfaces_warning_when_runtime_returns_text_with_warning() -> None:
+    gateway = _FakeLegacyGateway()
+    gateway.predict = lambda *args, **kwargs: type(
+        "_Prediction",
+        (),
+        {
+            "text": "IS35R-100",
+            "error": "low confidence fallback",
+            "raw": ([["box-1"]], "IS35R-100", [["pt-1"]], "low confidence fallback"),
+            "boxes": [["box-1"]],
+            "box_points": [["pt-1"]],
+        },
+    )()
+    plugin = OcrPlugin(runtime_gateway=gateway)
+    request = InspectionTaskRequest(
+        task_id="ocr_runtime_warning",
+        task_type=InspectionTaskType.OCR,
+        image_ref="frame://runtime",
+        roi_name="label_roi",
+        parameters={
+            "image": object(),
+            "model_path": "models/ocr.pt",
+            "expected_text": "IS35R-100",
+        },
+    )
+
+    result = plugin.run(request)
+
+    assert result.status == TaskStatus.PASS
+    assert result.outputs["reason"] == "text_match"
+    assert result.outputs["warning"] == "low confidence fallback"
+    assert result.outputs["error"] == ""
+    assert result.outputs["source"] == "runtime"
 
 
 def test_ocr_plugin_returns_error_when_legacy_runtime_reports_stack_overflow() -> None:
@@ -187,6 +290,8 @@ def test_ocr_plugin_returns_error_when_legacy_runtime_reports_stack_overflow() -
 
     assert result.status == TaskStatus.ERROR
     assert result.outputs["error"] == "exception: stack overflow"
+    assert result.outputs["reason"] == "runtime_stack_overflow"
+    assert result.outputs["source"] == "runtime"
 
 
 def test_ocr_plugin_returns_error_when_expected_text_has_no_runtime_or_detected_input() -> None:
@@ -205,3 +310,5 @@ def test_ocr_plugin_returns_error_when_expected_text_has_no_runtime_or_detected_
 
     assert result.status == TaskStatus.ERROR
     assert "image is not available" in result.message.lower()
+    assert result.outputs["reason"] == "missing_image"
+    assert result.outputs["source"] == "image_input"

@@ -7,6 +7,20 @@ from drb_inspection.application.contracts.context import AccessProfile
 
 
 @dataclass(frozen=True)
+class PreviewAnnotation:
+    roi_rect: tuple[int, int, int, int]
+    label: str = ""
+    status: str = ""
+
+
+@dataclass(frozen=True)
+class TaskArtifactLink:
+    task_id: str
+    image_path: str = ""
+    debug_path: str = ""
+
+
+@dataclass(frozen=True)
 class MainScreenState:
     title: str = "Main"
     current_user_name: str = ""
@@ -54,9 +68,14 @@ class MainScreenState:
     last_trigger_source: str = ""
     artifact_summary: str = ""
     last_artifact_dir: str = ""
+    latest_summary_path: str = ""
+    latest_annotated_frame_path: str = ""
+    latest_task_artifacts: list[TaskArtifactLink] = field(default_factory=list)
     recent_history_summaries: list[str] = field(default_factory=list)
     preview_frame: ImageFrame | None = None
+    preview_annotations: list[PreviewAnnotation] = field(default_factory=list)
     preview_summary: str = ""
     last_cycle_status: str = ""
     task_summaries: list[str] = field(default_factory=list)
+    ocr_diagnostics: list[str] = field(default_factory=list)
     message: str = ""

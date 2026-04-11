@@ -48,6 +48,7 @@ class InspectionRunResult:
 class InspectionTaskArtifact:
     task_id: str
     image_path: str = ""
+    debug_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,7 @@ class InspectionCycleArtifacts:
     root_dir: str
     summary_path: str
     frame_path: str = ""
+    annotated_frame_path: str = ""
     task_artifacts: list[InspectionTaskArtifact] = field(default_factory=list)
 
 

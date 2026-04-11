@@ -79,6 +79,10 @@ class MainScreenWidget(QWidget):
         self.roi_summary_label.setWordWrap(True)
         self.task_results_view = QTextEdit()
         self.task_results_view.setReadOnly(True)
+        self.ocr_diagnostics_view = QTextEdit()
+        self.ocr_diagnostics_view.setReadOnly(True)
+        self.artifact_paths_view = QTextEdit()
+        self.artifact_paths_view.setReadOnly(True)
         self.history_results_view = QTextEdit()
         self.history_results_view.setReadOnly(True)
         self.catalog_path_edit = QLineEdit()
@@ -99,6 +103,7 @@ class MainScreenWidget(QWidget):
         self.offset_y_spin = QSpinBox()
         self.image_width_spin = QSpinBox()
         self.image_height_spin = QSpinBox()
+        self.artifact_task_index_spin = QSpinBox()
         self.roi_to_move_spin = QSpinBox()
         self.move_all_roi_checkbox = QCheckBox("Move all")
         self.move_roi_left_button = QPushButton("ROI Left")
@@ -124,6 +129,11 @@ class MainScreenWidget(QWidget):
         self.save_button = QPushButton("Save Settings")
         self.refresh_button = QPushButton("Refresh")
         self.reset_counter_button = QPushButton("Reset Counters")
+        self.open_artifact_folder_button = QPushButton("Open Artifact Folder")
+        self.open_summary_button = QPushButton("Open Summary")
+        self.open_overlay_button = QPushButton("Open Overlay")
+        self.open_task_roi_button = QPushButton("Open Task ROI")
+        self.open_task_debug_button = QPushButton("Open Task Debug")
         self.run_cycle_button = QPushButton("Run Inspection Cycle")
         self.logout_button = QPushButton("Logout")
         self.grab_preview_button.setObjectName("primaryButton")
@@ -209,6 +219,12 @@ class MainScreenWidget(QWidget):
         self.task_results_view.setPlainText(
             "\n".join(state.task_summaries) if state.task_summaries else "No inspection cycle executed yet."
         )
+        self.ocr_diagnostics_view.setPlainText(
+            "\n".join(state.ocr_diagnostics)
+            if state.ocr_diagnostics
+            else "No OCR diagnostics available yet."
+        )
+        self.artifact_paths_view.setPlainText(self._build_artifact_paths_text(state))
         self.history_results_view.setPlainText(
             "\n".join(state.recent_history_summaries)
             if state.recent_history_summaries
@@ -218,6 +234,7 @@ class MainScreenWidget(QWidget):
             state.preview_frame.frame if state.preview_frame is not None else None,
             state.preview_summary or "No preview captured.",
             roi_rects=state.roi_rects,
+            annotations=state.preview_annotations,
         ))
 
         self.product_combo.blockSignals(True)
@@ -239,6 +256,8 @@ class MainScreenWidget(QWidget):
         self.offset_y_spin.setValue(state.offset_y)
         self.image_width_spin.setValue(state.image_width)
         self.image_height_spin.setValue(state.image_height)
+        self.artifact_task_index_spin.setMaximum(max(1, len(state.latest_task_artifacts) or 1))
+        self.artifact_task_index_spin.setValue(min(self.artifact_task_index_spin.value() or 1, max(1, len(state.latest_task_artifacts) or 1)))
         self.roi_to_move_spin.setMaximum(max(1, len(state.roi_points) or 5))
 
         profile = state.access_profile
@@ -272,6 +291,12 @@ class MainScreenWidget(QWidget):
         self.recording_button.setEnabled(profile.can_run_cycle)
         self.poll_plc_button.setEnabled(profile.can_auto_mode or profile.can_manual_mode or profile.can_run_cycle)
         self.reset_counter_button.setEnabled(profile.can_run_cycle)
+        self.open_artifact_folder_button.setEnabled(bool(state.last_artifact_dir))
+        self.open_summary_button.setEnabled(bool(state.latest_summary_path))
+        self.open_overlay_button.setEnabled(bool(state.latest_annotated_frame_path))
+        selected_artifact = self._selected_task_artifact(state)
+        self.open_task_roi_button.setEnabled(bool(selected_artifact and selected_artifact.image_path))
+        self.open_task_debug_button.setEnabled(bool(selected_artifact and selected_artifact.debug_path))
         self.save_button.setEnabled(
             profile.can_change_result_time
             or profile.can_change_sleep_time
@@ -351,6 +376,27 @@ class MainScreenWidget(QWidget):
         task_title.setObjectName("sectionTitle")
         runtime_layout.addWidget(task_title)
         runtime_layout.addWidget(self.task_results_view)
+        diagnostics_title = QLabel("OCR Diagnostics")
+        diagnostics_title.setObjectName("sectionTitle")
+        runtime_layout.addWidget(diagnostics_title)
+        runtime_layout.addWidget(self.ocr_diagnostics_view)
+        artifact_title = QLabel("Latest Artifacts")
+        artifact_title.setObjectName("sectionTitle")
+        runtime_layout.addWidget(artifact_title)
+        runtime_layout.addWidget(self.artifact_paths_view)
+        artifact_actions = QHBoxLayout()
+        artifact_actions.setSpacing(10)
+        artifact_actions.addWidget(self.open_artifact_folder_button)
+        artifact_actions.addWidget(self.open_summary_button)
+        artifact_actions.addWidget(self.open_overlay_button)
+        runtime_layout.addLayout(artifact_actions)
+        artifact_task_row = QHBoxLayout()
+        artifact_task_row.setSpacing(10)
+        artifact_task_row.addWidget(QLabel("Task"))
+        artifact_task_row.addWidget(self.artifact_task_index_spin)
+        artifact_task_row.addWidget(self.open_task_roi_button)
+        artifact_task_row.addWidget(self.open_task_debug_button)
+        runtime_layout.addLayout(artifact_task_row)
         history_title = QLabel("Recent Cycle History")
         history_title.setObjectName("sectionTitle")
         runtime_layout.addWidget(history_title)
@@ -440,7 +486,10 @@ class MainScreenWidget(QWidget):
         self.plc_protocol_combo.addItems(["modbus_tcp", "modbus_rtu", "slmp"])
         self.preview_label.setMinimumSize(520, 300)
         self.task_results_view.setMinimumHeight(180)
+        self.ocr_diagnostics_view.setMinimumHeight(120)
+        self.artifact_paths_view.setMinimumHeight(120)
         self.history_results_view.setMinimumHeight(140)
+        self.artifact_task_index_spin.setRange(1, 1)
 
     def _connect_events(self) -> None:
         self.product_combo.currentTextChanged.connect(self._on_product_changed)
@@ -467,6 +516,11 @@ class MainScreenWidget(QWidget):
         self.shutdown_runtime_button.clicked.connect(self._on_shutdown_runtime)
         self.refresh_button.clicked.connect(self._on_refresh)
         self.reset_counter_button.clicked.connect(self._on_reset_counters)
+        self.open_artifact_folder_button.clicked.connect(lambda: self._open_artifact_path("folder"))
+        self.open_summary_button.clicked.connect(lambda: self._open_artifact_path("summary"))
+        self.open_overlay_button.clicked.connect(lambda: self._open_artifact_path("overlay"))
+        self.open_task_roi_button.clicked.connect(lambda: self._open_artifact_path("task_roi"))
+        self.open_task_debug_button.clicked.connect(lambda: self._open_artifact_path("task_debug"))
         self.run_cycle_button.clicked.connect(self._on_run_cycle)
         self.logout_button.clicked.connect(self._on_logout)
         self.live_timer.timeout.connect(self._on_live_tick)
@@ -571,10 +625,12 @@ class MainScreenWidget(QWidget):
             updated_state = replace(
                 updated_state,
                 preview_frame=previous_state.preview_frame,
+                preview_annotations=previous_state.preview_annotations,
                 preview_summary=previous_state.preview_summary,
                 last_cycle_status=previous_state.last_cycle_status,
                 plc_last_result=previous_state.plc_last_result,
                 task_summaries=previous_state.task_summaries,
+                ocr_diagnostics=previous_state.ocr_diagnostics,
             )
         self.shell.main_state = updated_state
         self.render()
@@ -710,3 +766,51 @@ class MainScreenWidget(QWidget):
         self.live_preview_button.setChecked(False)
         self.live_preview_button.setText("Start Live Preview")
         self.live_preview_button.blockSignals(False)
+
+    def _build_artifact_paths_text(self, state) -> str:
+        lines = [
+            f"Folder: {state.last_artifact_dir or '<none>'}",
+            f"Summary: {state.latest_summary_path or '<none>'}",
+            f"Overlay: {state.latest_annotated_frame_path or '<none>'}",
+        ]
+        if not state.latest_task_artifacts:
+            lines.append("Tasks: <none>")
+            return "\n".join(lines)
+        lines.append("Tasks:")
+        for index, artifact in enumerate(state.latest_task_artifacts, start=1):
+            lines.append(
+                f"  {index}. {artifact.task_id}"
+                f" | roi={artifact.image_path or '<none>'}"
+                f" | debug={artifact.debug_path or '<none>'}"
+            )
+        return "\n".join(lines)
+
+    def _selected_task_artifact(self, state):
+        if not state.latest_task_artifacts:
+            return None
+        index = max(1, int(self.artifact_task_index_spin.value() or 1)) - 1
+        if index >= len(state.latest_task_artifacts):
+            return None
+        return state.latest_task_artifacts[index]
+
+    def _open_artifact_path(self, target: str) -> None:
+        state = self.shell.main_state or self.shell.refresh_main()
+        selected_artifact = self._selected_task_artifact(state)
+        path = ""
+        if target == "folder":
+            path = state.last_artifact_dir
+        elif target == "summary":
+            path = state.latest_summary_path
+        elif target == "overlay":
+            path = state.latest_annotated_frame_path
+        elif target == "task_roi" and selected_artifact is not None:
+            path = selected_artifact.image_path
+        elif target == "task_debug" and selected_artifact is not None:
+            path = selected_artifact.debug_path
+
+        success, message = self.shell.open_external_path(path)
+        self.shell.main_state = replace(state, message=message)
+        if success:
+            self.render()
+            return
+        self.render()

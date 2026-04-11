@@ -58,6 +58,8 @@ class InspectionPipeline:
                 return TaskStatus.ERROR
             if result.status == TaskStatus.ERROR:
                 return TaskStatus.ERROR
+            if result.status == TaskStatus.SKIPPED:
+                continue
             if result.status != TaskStatus.PASS:
                 return TaskStatus.FAIL
         return TaskStatus.PASS

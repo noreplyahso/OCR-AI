@@ -5,6 +5,8 @@ from typing import Any, Sequence
 from PyQt5.QtCore import Qt, QRect
 from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
 
+from drb_inspection.ui.screens.main.state import PreviewAnnotation
+
 
 def build_preview_pixmap(
     frame: Any,
@@ -12,9 +14,14 @@ def build_preview_pixmap(
     width: int = 520,
     height: int = 300,
     roi_rects: Sequence[tuple[int, int, int, int]] | None = None,
+    annotations: Sequence[PreviewAnnotation] | None = None,
 ) -> QPixmap:
     if frame is not None:
-        pixmap = _try_build_pixmap_from_array(frame, roi_rects=roi_rects or [])
+        pixmap = _try_build_pixmap_from_array(
+            frame,
+            roi_rects=roi_rects or [],
+            annotations=annotations or [],
+        )
         if pixmap is not None:
             return pixmap.scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
     return _build_placeholder_pixmap(summary=summary or "No preview available.", width=width, height=height)
@@ -24,6 +31,7 @@ def _try_build_pixmap_from_array(
     frame: Any,
     *,
     roi_rects: Sequence[tuple[int, int, int, int]],
+    annotations: Sequence[PreviewAnnotation],
 ) -> QPixmap | None:
     shape = getattr(frame, "shape", None)
     data = getattr(frame, "data", None)
@@ -50,25 +58,45 @@ def _try_build_pixmap_from_array(
         else:
             return None
         pixmap = QPixmap.fromImage(image.copy())
-        if roi_rects:
+        if annotations or roi_rects:
             painter = QPainter(pixmap)
             painter.setRenderHint(QPainter.Antialiasing)
             line_width = max(2, int(max(1, pixmap.width()) / 500))
-            painter.setPen(QPen(QColor("#38c172"), line_width))
             label_font = QFont("Segoe UI", max(10, int(max(1, pixmap.width()) / 95)))
             label_font.setBold(True)
             painter.setFont(label_font)
-            for index, (x_value, y_value, rect_width, rect_height) in enumerate(roi_rects, start=1):
-                painter.drawRect(int(x_value), int(y_value), int(rect_width), int(rect_height))
-                painter.drawText(
-                    int(x_value),
-                    max(28, int(y_value) - 12),
-                    f"ROI {index}",
-                )
+            if annotations:
+                for index, annotation in enumerate(annotations, start=1):
+                    x_value, y_value, rect_width, rect_height = annotation.roi_rect
+                    color = _annotation_color(annotation.status)
+                    painter.setPen(QPen(color, line_width))
+                    painter.drawRect(int(x_value), int(y_value), int(rect_width), int(rect_height))
+                    label = annotation.label or f"ROI {index}"
+                    painter.drawText(int(x_value), max(28, int(y_value) - 12), label)
+            else:
+                painter.setPen(QPen(QColor("#38c172"), line_width))
+                for index, (x_value, y_value, rect_width, rect_height) in enumerate(roi_rects, start=1):
+                    painter.drawRect(int(x_value), int(y_value), int(rect_width), int(rect_height))
+                    painter.drawText(
+                        int(x_value),
+                        max(28, int(y_value) - 12),
+                        f"ROI {index}",
+                    )
             painter.end()
         return pixmap
     except Exception:
         return None
+
+
+def _annotation_color(status: str) -> QColor:
+    normalized = (status or "").strip().lower()
+    if normalized == "pass":
+        return QColor("#00b050")
+    if normalized == "fail":
+        return QColor("#ff3b30")
+    if normalized == "error":
+        return QColor("#ff9500")
+    return QColor("#38c172")
 
 
 def _build_placeholder_pixmap(summary: str, width: int, height: int) -> QPixmap:

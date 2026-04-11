@@ -3,7 +3,12 @@ from pathlib import Path
 from drb_inspection.adapters.camera.base import CameraAdapter
 from drb_inspection.app.container import build_container
 from drb_inspection.app.settings import AppRuntimeSettings
-from drb_inspection.application.contracts.inspection import TaskStatus
+from drb_inspection.application.contracts.inspection import (
+    InspectionRunResult,
+    InspectionTaskResult,
+    InspectionTaskType,
+    TaskStatus,
+)
 from drb_inspection.application.services.recipe_loader import RecipeLoader
 from drb_inspection.application.use_cases.perform_cycle import PerformInspectionCycleUseCase
 from drb_inspection.application.use_cases.run_inspection import RunInspectionUseCase
@@ -81,3 +86,36 @@ def test_perform_cycle_attempts_camera_connect_when_disconnected() -> None:
 
     assert cycle_result.inspection.overall_status == TaskStatus.PASS
     assert cycle_result.plc_result_sent == "OK"
+
+
+def test_perform_cycle_sends_ok_when_required_tasks_are_skipped() -> None:
+    class _SkipRunInspection:
+        def execute(self, recipe, image_ref):
+            return InspectionRunResult(
+                recipe_name=recipe.name,
+                overall_status=TaskStatus.PASS,
+                task_results=[
+                    InspectionTaskResult(
+                        task_id="ocr_skip",
+                        task_type=InspectionTaskType.OCR,
+                        status=TaskStatus.SKIPPED,
+                        message="OCR text was empty.",
+                        outputs={"counted_quantity": False, "text": ""},
+                    )
+                ],
+            )
+
+    recipe_path = Path(__file__).resolve().parents[1] / "examples" / "recipes" / "ocr_segment_recipe.yaml"
+    container = build_container()
+    recipe = RecipeLoader().load_from_file(recipe_path)
+    use_case = PerformInspectionCycleUseCase(
+        camera=container.camera,
+        plc=container.plc,
+        run_inspection=_SkipRunInspection(),
+    )
+
+    cycle_result = use_case.execute(recipe=recipe)
+
+    assert cycle_result.inspection.overall_status == TaskStatus.PASS
+    assert cycle_result.plc_result_sent == "OK"
+    assert container.plc.sent_results[-1] == "OK"

@@ -1,9 +1,19 @@
 from datetime import datetime
+import os
+from pathlib import Path
 
+from drb_inspection.adapters.camera.models import ImageFrame
 from drb_inspection.adapters.db.models import InspectionHistoryRecord, ProductRecord, UserRecord
 from drb_inspection.adapters.plc.models import PlcReadState
 from drb_inspection.app.container import build_container
 from drb_inspection.app.settings import AppRuntimeSettings
+from drb_inspection.application.contracts.inspection import (
+    InspectionCycleResult,
+    InspectionRunResult,
+    InspectionTaskResult,
+    InspectionTaskType,
+    TaskStatus,
+)
 from drb_inspection.ui.navigation import ScreenId
 from drb_inspection.ui.screens.login.presenter import LoginScreenPresenter
 from drb_inspection.ui.screens.main.presenter import MainScreenPresenter
@@ -146,6 +156,32 @@ def test_desktop_shell_applies_recording_default_from_runtime_settings() -> None
     assert shell.main_presenter.runtime_controls.recording_enabled is True
 
 
+def test_desktop_shell_can_open_existing_external_path(monkeypatch, tmp_path: Path) -> None:
+    container = build_container()
+    shell = DesktopShell(container=container)
+    target = tmp_path / "artifact.json"
+    target.write_text("{}", encoding="utf-8")
+    calls: list[str] = []
+
+    monkeypatch.setattr(os, "startfile", lambda value: calls.append(value))
+
+    success, message = shell.open_external_path(str(target))
+
+    assert success is True
+    assert calls == [str(target)]
+    assert str(target) in message
+
+
+def test_desktop_shell_rejects_missing_external_path() -> None:
+    container = build_container()
+    shell = DesktopShell(container=container)
+
+    success, message = shell.open_external_path("")
+
+    assert success is False
+    assert "not available" in message.lower()
+
+
 def test_main_presenter_can_run_cycle_for_selected_product() -> None:
     container = build_container(runtime_settings=AppRuntimeSettings(demo_mode=True))
     _seed_main_screen_state(container)
@@ -157,6 +193,9 @@ def test_main_presenter_can_run_cycle_for_selected_product() -> None:
     assert "OK" in state.message
     assert state.plc_last_result == "OK"
     assert state.task_summaries
+    assert "match=forward" in state.task_summaries[0]
+    assert "reason=text_match" in state.task_summaries[0]
+    assert "source=detected_override" in state.task_summaries[0]
     assert state.last_quantity == 5
     assert state.last_ok_count == 5
     assert state.last_ng_count == 0
@@ -166,6 +205,16 @@ def test_main_presenter_can_run_cycle_for_selected_product() -> None:
     assert state.inspection_total_count == 5
     assert state.inspection_counter_value == 5
     assert state.inspection_batch_value == 0
+    assert len(state.preview_annotations) == 5
+    assert state.preview_annotations[0].label == "PRODUCT-A"
+    assert state.preview_annotations[0].status == "pass"
+    assert state.ocr_diagnostics
+    assert "match=forward" in state.ocr_diagnostics[0]
+    assert "reason=text_match" in state.ocr_diagnostics[0]
+    assert "source=detected_override" in state.ocr_diagnostics[0]
+    assert "warning=<none>" in state.ocr_diagnostics[0]
+    assert "raw=<none>" in state.ocr_diagnostics[0]
+    assert "row=20.0" in state.ocr_diagnostics[0]
 
 
 def test_main_presenter_run_cycle_populates_artifact_summary_when_recording_is_enabled(tmp_path) -> None:
@@ -183,7 +232,113 @@ def test_main_presenter_run_cycle_populates_artifact_summary_when_recording_is_e
 
     assert "artifacts saved" in state.message
     assert state.artifact_summary.startswith("Artifacts saved | summary=")
+    assert " | overlay=" in state.artifact_summary
     assert state.last_artifact_dir
+    assert state.latest_summary_path
+    assert state.latest_task_artifacts
+    assert state.latest_task_artifacts[0].task_id == "ocr_label_1"
+    assert state.latest_task_artifacts[0].debug_path
+
+
+def test_main_presenter_does_not_count_empty_ocr_text_in_runtime_metrics() -> None:
+    container = build_container(runtime_settings=AppRuntimeSettings(demo_mode=False))
+    _seed_main_screen_state(container)
+    presenter = _build_main_presenter(container)
+
+    class _EmptyTextPerformCycle:
+        def execute(self, recipe):
+            return InspectionCycleResult(
+                image_ref=ImageFrame(frame=[[0, 1], [2, 3]], capture_seconds=0.01),
+                inspection=InspectionRunResult(
+                    recipe_name=recipe.name,
+                    overall_status=TaskStatus.PASS,
+                    task_results=[
+                        InspectionTaskResult(
+                            task_id="ocr_label_1",
+                            task_type=InspectionTaskType.OCR,
+                            status=TaskStatus.SKIPPED,
+                            message="OCR text was empty for expected product.",
+                            outputs={
+                                "text": "",
+                                "matched_text": "",
+                                "expected_text": "PRODUCT-A",
+                                "roi_rect": (0, 0, 2, 2),
+                                "reason": "empty_text",
+                                "source": "runtime",
+                                "counted_quantity": False,
+                            },
+                        )
+                    ],
+                    message="",
+                ),
+                plc_result_sent="OK",
+                artifacts=None,
+                trigger_source="manual",
+                duration_ms=1.0,
+                signal_summary="",
+            )
+
+    container.run_current_product_cycle.perform_cycle = _EmptyTextPerformCycle()
+
+    state = presenter.run_cycle()
+
+    assert state.last_cycle_status == "pass"
+    assert state.last_quantity == 0
+    assert state.last_ok_count == 0
+    assert state.last_ng_count == 0
+    assert state.inspection_total_count == 0
+    assert state.last_result_label == "OK"
+    assert state.plc_last_result == "OK"
+    assert state.preview_annotations == []
+
+
+def test_main_presenter_hides_mismatched_ocr_text_from_preview_overlay() -> None:
+    container = build_container(runtime_settings=AppRuntimeSettings(demo_mode=False))
+    _seed_main_screen_state(container)
+    presenter = _build_main_presenter(container)
+
+    class _MismatchPerformCycle:
+        def execute(self, recipe):
+            return InspectionCycleResult(
+                image_ref=ImageFrame(frame=[[0, 1], [2, 3]], capture_seconds=0.01),
+                inspection=InspectionRunResult(
+                    recipe_name=recipe.name,
+                    overall_status=TaskStatus.FAIL,
+                    task_results=[
+                        InspectionTaskResult(
+                            task_id="ocr_label_1",
+                            task_type=InspectionTaskType.OCR,
+                            status=TaskStatus.FAIL,
+                            message="OCR text did not match expected product.",
+                            outputs={
+                                "text": "WRONG-TEXT",
+                                "matched_text": "",
+                                "expected_text": "PRODUCT-A",
+                                "roi_rect": (0, 0, 2, 2),
+                                "reason": "text_mismatch",
+                                "source": "runtime",
+                                "counted_quantity": True,
+                            },
+                        )
+                    ],
+                    message="",
+                ),
+                plc_result_sent="NG",
+                artifacts=None,
+                trigger_source="manual",
+                duration_ms=1.0,
+                signal_summary="",
+            )
+
+    container.run_current_product_cycle.perform_cycle = _MismatchPerformCycle()
+
+    state = presenter.run_cycle()
+
+    assert len(state.preview_annotations) == 1
+    assert state.preview_annotations[0].status == "fail"
+    assert state.preview_annotations[0].label == ""
+    assert state.last_quantity == 1
+    assert state.last_ng_count == 1
 
 
 def test_main_presenter_can_grab_preview_frame() -> None:

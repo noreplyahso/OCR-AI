@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from drb_inspection.app.container import AppContainer
 from drb_inspection.ui.navigation import ScreenId
@@ -81,6 +83,21 @@ class DesktopShell:
         self.main_state = self.main_presenter.load()
         self.active_screen = ScreenId.MAIN
         return self.main_state
+
+    def open_external_path(self, path: str) -> tuple[bool, str]:
+        resolved = str(path or "").strip()
+        if not resolved:
+            return False, "Artifact path is not available."
+
+        target = Path(resolved)
+        if not target.exists():
+            return False, f"Artifact path does not exist: {target}"
+
+        try:
+            os.startfile(str(target))
+        except Exception as exc:
+            return False, f"Failed to open artifact path: {exc}"
+        return True, f"Opened artifact path: {target}"
 
     def show(self) -> None:
         screen = self.launch()

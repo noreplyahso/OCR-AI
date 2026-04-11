@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Sequence
 
 from drb_inspection.adapters.camera.models import ImageFrame
 from drb_inspection.adapters.db.models import InspectionHistoryRecord
@@ -23,7 +24,7 @@ from drb_inspection.application.use_cases.save_product_settings import SaveProdu
 from drb_inspection.application.use_cases.save_session_settings import SaveSessionSettingsUseCase
 from drb_inspection.application.use_cases.select_product import SelectProductUseCase
 from drb_inspection.application.use_cases.shutdown_runtime import ShutdownRuntimeUseCase
-from drb_inspection.ui.screens.main.state import MainScreenState
+from drb_inspection.ui.screens.main.state import MainScreenState, PreviewAnnotation, TaskArtifactLink
 
 
 @dataclass
@@ -46,6 +47,9 @@ class RuntimeControlState:
     recording_enabled: bool = False
     artifact_summary: str = ""
     last_artifact_dir: str = ""
+    latest_summary_path: str = ""
+    latest_annotated_frame_path: str = ""
+    latest_task_artifacts: list[TaskArtifactLink] = field(default_factory=list)
 
 
 @dataclass
@@ -118,6 +122,9 @@ class MainScreenPresenter:
             recording_enabled=self.runtime_controls.recording_enabled,
             artifact_summary=self.runtime_controls.artifact_summary,
             last_artifact_dir=self.runtime_controls.last_artifact_dir,
+            latest_summary_path=self.runtime_controls.latest_summary_path,
+            latest_annotated_frame_path=self.runtime_controls.latest_annotated_frame_path,
+            latest_task_artifacts=list(self.runtime_controls.latest_task_artifacts),
             recent_history_summaries=self._build_history_summaries(context.recent_inspection_history),
         )
 
@@ -350,15 +357,77 @@ class MainScreenPresenter:
         for task_result in cycle_result.inspection.task_results:
             text = str(task_result.outputs.get("text", "")).strip()
             expected = str(task_result.outputs.get("expected_text", "")).strip()
+            matched_variant = str(task_result.outputs.get("matched_variant", "")).strip()
+            match_mode = str(task_result.outputs.get("match_mode", "")).strip()
+            reason = str(task_result.outputs.get("reason", "")).strip()
+            source = str(task_result.outputs.get("source", "")).strip()
+            warning = str(task_result.outputs.get("warning", "")).strip()
             details = f"{task_result.task_id}: {task_result.status.value.upper()}"
             if text:
                 details += f" | text={text}"
             if expected:
                 details += f" | expected={expected}"
+            if match_mode:
+                details += f" | match={match_mode}"
+            if matched_variant and matched_variant != text:
+                details += f" | variant={matched_variant}"
+            if reason:
+                details += f" | reason={reason}"
+            if source:
+                details += f" | source={source}"
+            if warning:
+                details += f" | warning={warning}"
             if task_result.message:
                 details += f" | {task_result.message}"
             summaries.append(details)
         return summaries
+
+    def _build_ocr_diagnostics(self, cycle_result: InspectionCycleResult) -> list[str]:
+        diagnostics: list[str] = []
+        for task_result in cycle_result.inspection.task_results:
+            if task_result.task_type.value != "ocr":
+                continue
+            outputs = task_result.outputs
+            diagnostics.append(
+                " | ".join(
+                    [
+                        task_result.task_id,
+                        f"status={task_result.status.value}",
+                        f"text={self._diagnostic_value(outputs.get('text'))}",
+                        f"expected={self._diagnostic_value(outputs.get('expected_text'))}",
+                        f"match={self._diagnostic_value(outputs.get('match_mode'))}",
+                        f"variant={self._diagnostic_value(outputs.get('matched_variant'))}",
+                        f"reason={self._diagnostic_value(outputs.get('reason'))}",
+                        f"source={self._diagnostic_value(outputs.get('source'))}",
+                        f"warning={self._diagnostic_value(outputs.get('warning'))}",
+                        f"boxes={self._count_items(outputs.get('detection_boxes'))}",
+                        f"points={self._count_items(outputs.get('detection_points'))}",
+                        f"raw={self._summarize_raw_result(outputs.get('raw_result'))}",
+                        f"accept={self._diagnostic_value(outputs.get('acceptance_threshold'))}",
+                        f"dup={self._diagnostic_value(outputs.get('duplication_threshold'))}",
+                        f"row={self._diagnostic_value(outputs.get('row_threshold'))}",
+                        f"error={self._diagnostic_value(outputs.get('error'))}",
+                    ]
+                )
+            )
+        return diagnostics
+
+    def _build_preview_annotations(self, cycle_result: InspectionCycleResult) -> list[PreviewAnnotation]:
+        annotations: list[PreviewAnnotation] = []
+        for task_result in cycle_result.inspection.task_results:
+            if task_result.task_type.value == "ocr" and not self._task_counted_for_quantity(task_result):
+                continue
+            roi_rect = task_result.outputs.get("roi_rect")
+            if not isinstance(roi_rect, (list, tuple)) or len(roi_rect) < 4:
+                continue
+            annotations.append(
+                PreviewAnnotation(
+                    roi_rect=(int(roi_rect[0]), int(roi_rect[1]), int(roi_rect[2]), int(roi_rect[3])),
+                    label=self._build_preview_annotation_label(task_result),
+                    status=task_result.status.value,
+                )
+            )
+        return annotations
 
     def _build_cycle_message(self, cycle_result: InspectionCycleResult) -> str:
         base = (
@@ -414,8 +483,10 @@ class MainScreenPresenter:
                 "plc_poll_action": plc_poll_action,
                 "plc_cycle_triggered": plc_cycle_triggered,
                 "preview_frame": cycle_result.image_ref,
+                "preview_annotations": self._build_preview_annotations(cycle_result),
                 "preview_summary": self._build_preview_summary(cycle_result.image_ref),
                 "task_summaries": self._build_task_summaries(cycle_result),
+                "ocr_diagnostics": self._build_ocr_diagnostics(cycle_result),
                 "inspection_total_count": self.cycle_metrics.total_count,
                 "inspection_counter_value": self.cycle_metrics.counter_value,
                 "inspection_batch_value": self.cycle_metrics.batch_value,
@@ -427,6 +498,9 @@ class MainScreenPresenter:
                 "last_trigger_source": self.cycle_metrics.last_trigger_source,
                 "artifact_summary": self.runtime_controls.artifact_summary,
                 "last_artifact_dir": self.runtime_controls.last_artifact_dir,
+                "latest_summary_path": self.runtime_controls.latest_summary_path,
+                "latest_annotated_frame_path": self.runtime_controls.latest_annotated_frame_path,
+                "latest_task_artifacts": list(self.runtime_controls.latest_task_artifacts),
                 "recent_history_summaries": state.recent_history_summaries,
                 "message": message,
             }
@@ -450,10 +524,15 @@ class MainScreenPresenter:
         cycle_result: InspectionCycleResult,
         default_number: int | None,
     ) -> None:
-        quantity = len(cycle_result.inspection.task_results)
+        counted_results = [
+            task_result
+            for task_result in cycle_result.inspection.task_results
+            if self._task_counted_for_quantity(task_result)
+        ]
+        quantity = len(counted_results)
         ok_count = sum(
             1
-            for task_result in cycle_result.inspection.task_results
+            for task_result in counted_results
             if task_result.status.value == "pass"
         )
         ng_count = max(0, quantity - ok_count)
@@ -471,15 +550,57 @@ class MainScreenPresenter:
         self.cycle_metrics.batch_value = self.cycle_metrics.total_count // normalized_default
         if cycle_result.artifacts is not None:
             frame_file = cycle_result.artifacts.frame_path or "<none>"
+            overlay_file = cycle_result.artifacts.annotated_frame_path or "<none>"
             self.runtime_controls.artifact_summary = (
                 f"Artifacts saved | summary={cycle_result.artifacts.summary_path}"
+                f" | overlay={overlay_file}"
                 f" | frame={frame_file}"
                 f" | tasks={len(cycle_result.artifacts.task_artifacts)}"
             )
             self.runtime_controls.last_artifact_dir = cycle_result.artifacts.root_dir
+            self.runtime_controls.latest_summary_path = cycle_result.artifacts.summary_path
+            self.runtime_controls.latest_annotated_frame_path = cycle_result.artifacts.annotated_frame_path
+            self.runtime_controls.latest_task_artifacts = [
+                TaskArtifactLink(
+                    task_id=artifact.task_id,
+                    image_path=artifact.image_path,
+                    debug_path=artifact.debug_path,
+                )
+                for artifact in cycle_result.artifacts.task_artifacts
+            ]
             return
         self.runtime_controls.artifact_summary = ""
         self.runtime_controls.last_artifact_dir = ""
+        self.runtime_controls.latest_summary_path = ""
+        self.runtime_controls.latest_annotated_frame_path = ""
+        self.runtime_controls.latest_task_artifacts = []
+
+    def _task_counted_for_quantity(self, task_result) -> bool:
+        if task_result.task_type.value != "ocr":
+            return True
+        counted = task_result.outputs.get("counted_quantity")
+        if isinstance(counted, bool):
+            return counted
+        text = str(task_result.outputs.get("text", "")).strip()
+        return bool(text)
+
+    def _build_preview_annotation_label(self, task_result) -> str:
+        outputs = task_result.outputs
+        if task_result.task_type.value != "ocr":
+            return (
+                str(outputs.get("matched_text", "")).strip()
+                or str(outputs.get("text", "")).strip()
+                or str(outputs.get("expected_text", "")).strip()
+                or str(outputs.get("roi_name", "")).strip()
+                or task_result.task_id
+            )
+        if task_result.status.value == "pass":
+            return (
+                str(outputs.get("matched_text", "")).strip()
+                or str(outputs.get("expected_text", "")).strip()
+                or str(outputs.get("text", "")).strip()
+            )
+        return ""
 
     def _build_history_summaries(self, history: list[InspectionHistoryRecord]) -> list[str]:
         summaries: list[str] = []
@@ -497,3 +618,24 @@ class MainScreenPresenter:
                 f" | user={entry.user_name or '<none>'}"
             )
         return summaries
+
+    def _count_items(self, value: object) -> int:
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return len(value)
+        return 0
+
+    def _diagnostic_value(self, value: object) -> str:
+        if value is None:
+            return "<none>"
+        text = str(value).strip()
+        return text or "<none>"
+
+    def _summarize_raw_result(self, value: object) -> str:
+        if value is None:
+            return "<none>"
+        if isinstance(value, tuple):
+            return f"tuple[{len(value)}]"
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return f"seq[{len(value)}]"
+        text = str(value).strip()
+        return text or "<none>"
