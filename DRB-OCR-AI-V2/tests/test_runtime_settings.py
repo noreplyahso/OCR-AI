@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from drb_inspection.adapters.camera.base import CameraAdapter
 from drb_inspection.adapters.camera.models import CameraConnectionSettings
@@ -13,7 +14,7 @@ from drb_inspection.adapters.plc.models import PlcConnectionSettings, PlcProtoco
 from drb_inspection.adapters.plc.protocol_adapter import ProtocolPlcAdapter
 from drb_inspection.adapters.plc.profiles import resolve_signal_map
 from drb_inspection.app.container import build_container
-from drb_inspection.app.settings import AppRuntimeSettings, load_runtime_settings
+from drb_inspection.app.settings import AppRuntimeSettings, load_runtime_settings, resolve_app_storage_root_dir
 
 
 def test_load_runtime_settings_reads_env_flags() -> None:
@@ -33,6 +34,7 @@ def test_load_runtime_settings_reads_env_flags() -> None:
         "DRB_V2_DB_PASSWORD",
         "DRB_V2_DB_NAME",
         "DRB_V2_DB_AUTOCOMMIT",
+        "DRB_V2_SYNC_V1_SESSION",
         "DRB_V2_PLC_VENDOR",
         "DRB_V2_PLC_PROTOCOL",
         "DRB_V2_PLC_IP",
@@ -54,6 +56,7 @@ def test_load_runtime_settings_reads_env_flags() -> None:
         os.environ["DRB_V2_DB_PASSWORD"] = "secret"
         os.environ["DRB_V2_DB_NAME"] = "drb_v2"
         os.environ["DRB_V2_DB_AUTOCOMMIT"] = "1"
+        os.environ["DRB_V2_SYNC_V1_SESSION"] = "0"
         os.environ["DRB_V2_PLC_VENDOR"] = "mitsubishi"
         os.environ["DRB_V2_PLC_PROTOCOL"] = "slmp"
         os.environ["DRB_V2_PLC_IP"] = "192.168.3.39"
@@ -89,9 +92,10 @@ def test_load_runtime_settings_reads_env_flags() -> None:
 
 
 def test_mitsubishi_defaults_to_slmp_when_protocol_is_not_explicit() -> None:
-    keys = ["DRB_V2_PLC_VENDOR", "DRB_V2_PLC_PROTOCOL", "DRB_V2_PLC_PORT"]
+    keys = ["DRB_V2_SYNC_V1_SESSION", "DRB_V2_PLC_VENDOR", "DRB_V2_PLC_PROTOCOL", "DRB_V2_PLC_PORT"]
     previous = {key: os.environ.get(key) for key in keys}
     try:
+        os.environ["DRB_V2_SYNC_V1_SESSION"] = "0"
         os.environ["DRB_V2_PLC_VENDOR"] = "mitsubishi"
         os.environ.pop("DRB_V2_PLC_PROTOCOL", None)
         os.environ.pop("DRB_V2_PLC_PORT", None)
@@ -106,6 +110,64 @@ def test_mitsubishi_defaults_to_slmp_when_protocol_is_not_explicit() -> None:
     assert settings.plc_connection.vendor == PlcVendor.MITSUBISHI
     assert settings.plc_connection.protocol_type == PlcProtocolType.SLMP
     assert settings.plc_connection.port == 5000
+
+
+def test_plc_defaults_to_mitsubishi_slmp_when_env_is_not_explicit() -> None:
+    keys = ["DRB_V2_SYNC_V1_SESSION", "DRB_V2_PLC_VENDOR", "DRB_V2_PLC_PROTOCOL", "DRB_V2_PLC_PORT"]
+    previous = {key: os.environ.get(key) for key in keys}
+    try:
+        os.environ["DRB_V2_SYNC_V1_SESSION"] = "0"
+        for key in keys:
+            if key != "DRB_V2_SYNC_V1_SESSION":
+                os.environ.pop(key, None)
+        settings = load_runtime_settings()
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    assert settings.plc_connection.vendor == PlcVendor.MITSUBISHI
+    assert settings.plc_connection.protocol_type == PlcProtocolType.SLMP
+    assert settings.plc_connection.port == 5000
+
+
+def test_load_runtime_settings_can_sync_plc_defaults_from_v1_session(monkeypatch) -> None:
+    keys = [
+        "DRB_V2_SYNC_V1_SESSION",
+        "DRB_V2_PLC_PROTOCOL",
+        "DRB_V2_PLC_IP",
+        "DRB_V2_PLC_PORT",
+    ]
+    previous = {key: os.environ.get(key) for key in keys}
+    try:
+        os.environ["DRB_V2_SYNC_V1_SESSION"] = "1"
+        os.environ.pop("DRB_V2_PLC_PROTOCOL", None)
+        os.environ.pop("DRB_V2_PLC_IP", None)
+        os.environ.pop("DRB_V2_PLC_PORT", None)
+        monkeypatch.setattr(
+            "drb_inspection.app.settings._load_legacy_v1_session_defaults",
+            lambda: {
+                "plc_protocol": PlcProtocolType.MODBUS_TCP,
+                "plc_ip": "192.168.3.250",
+                "plc_port": 502,
+                "result_time": 1,
+                "sleep_time": 10,
+            },
+        )
+
+        settings = load_runtime_settings()
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    assert settings.plc_connection.protocol_type == PlcProtocolType.MODBUS_TCP
+    assert settings.plc_connection.ip == "192.168.3.250"
+    assert settings.plc_connection.port == 502
 
 
 def test_build_container_uses_selected_camera_and_plc_adapters() -> None:
@@ -175,3 +237,15 @@ def test_build_container_can_seed_demo_data_when_enabled() -> None:
     assert container.repository.get_product("PRODUCT-A") is not None
     assert container.repository.get_session().product_name == "PRODUCT-A"
     assert container.repository.get_session().plc_protocol == PlcProtocolType.SLMP.value
+
+
+def test_resolve_app_storage_root_dir_falls_back_inside_workspace_when_localappdata_is_missing(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+
+    resolved = resolve_app_storage_root_dir()
+
+    assert resolved == Path.cwd() / ".drb-ocr-ai-v2"
+    assert resolved.exists()
+    assert resolved.is_dir()

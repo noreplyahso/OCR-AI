@@ -1,8 +1,9 @@
 from datetime import datetime
 import os
+from dataclasses import replace
 from pathlib import Path
 
-from drb_inspection.adapters.camera.models import ImageFrame
+from drb_inspection.adapters.camera.models import CameraConnectionSettings, CameraVendor, ImageFrame
 from drb_inspection.adapters.db.models import InspectionHistoryRecord, ProductRecord, UserRecord
 from drb_inspection.adapters.plc.models import PlcReadState
 from drb_inspection.app.container import build_container
@@ -47,6 +48,7 @@ def _build_main_presenter(container) -> MainScreenPresenter:
         shutdown_runtime=container.shutdown_runtime,
         configure_camera=container.configure_camera,
         grab_preview=container.grab_preview,
+        inspect_current_product_preview=container.inspect_current_product_preview,
         import_product_catalog=container.import_product_catalog,
         save_session_settings=container.save_session_settings,
         move_session_roi=container.move_session_roi,
@@ -156,6 +158,47 @@ def test_desktop_shell_applies_recording_default_from_runtime_settings() -> None
     assert shell.main_presenter.runtime_controls.recording_enabled is True
 
 
+def test_desktop_shell_applies_auto_preview_on_login_for_demo_camera() -> None:
+    container = build_container(runtime_settings=AppRuntimeSettings(auto_preview_on_start=True))
+    container.repository.save_user(UserRecord(user_name="operator6", password_hash="pw", role="Operator"))
+    container.repository.upsert_product(
+        ProductRecord(product_name="PRODUCT-A", model_path="models/product_a.pt")
+    )
+    container.repository.update_session(product_name="PRODUCT-A")
+    shell = DesktopShell(container=container)
+
+    shell.launch()
+    next_screen = shell.submit_login("operator6", "pw")
+
+    assert next_screen == ScreenId.MAIN
+    assert shell.main_state is not None
+    assert shell.main_state.preview_frame is not None
+    assert "Preview frame captured." in shell.main_state.message
+
+
+def test_desktop_shell_skips_auto_preview_on_login_for_hardware_camera() -> None:
+    container = build_container(
+        runtime_settings=AppRuntimeSettings(
+            auto_preview_on_start=True,
+            camera_connection=CameraConnectionSettings(vendor=CameraVendor.BASLER),
+        )
+    )
+    container.repository.save_user(UserRecord(user_name="operator7", password_hash="pw", role="Operator"))
+    container.repository.upsert_product(
+        ProductRecord(product_name="PRODUCT-A", model_path="models/product_a.pt")
+    )
+    container.repository.update_session(product_name="PRODUCT-A")
+    shell = DesktopShell(container=container)
+
+    shell.launch()
+    next_screen = shell.submit_login("operator7", "pw")
+
+    assert next_screen == ScreenId.MAIN
+    assert shell.main_state is not None
+    assert shell.main_state.preview_frame is None
+    assert "Auto preview skipped for hardware camera on login." in shell.main_state.message
+
+
 def test_desktop_shell_can_open_existing_external_path(monkeypatch, tmp_path: Path) -> None:
     container = build_container()
     shell = DesktopShell(container=container)
@@ -180,6 +223,37 @@ def test_desktop_shell_rejects_missing_external_path() -> None:
 
     assert success is False
     assert "not available" in message.lower()
+
+
+def test_desktop_shell_resolve_artifact_browser_path_prefers_latest_cycle_dir(tmp_path: Path) -> None:
+    container = build_container(
+        runtime_settings=AppRuntimeSettings(
+            artifact_root_dir=str(tmp_path / "inspection-results")
+        )
+    )
+    shell = DesktopShell(container=container)
+    cycle_dir = tmp_path / "inspection-results" / "2026-04-12" / "PRODUCT-A" / "OK" / "123456"
+    cycle_dir.mkdir(parents=True)
+    shell.main_state = shell.main_presenter.load()
+    shell.main_state = replace(shell.main_state, last_artifact_dir=str(cycle_dir))
+
+    resolved = shell.resolve_artifact_browser_path()
+
+    assert resolved == str(cycle_dir)
+
+
+def test_desktop_shell_resolve_artifact_browser_path_falls_back_to_runtime_root(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "inspection-results"
+    container = build_container(
+        runtime_settings=AppRuntimeSettings(
+            artifact_root_dir=str(runtime_root)
+        )
+    )
+    shell = DesktopShell(container=container)
+
+    resolved = shell.resolve_artifact_browser_path()
+
+    assert resolved == str(runtime_root)
 
 
 def test_main_presenter_can_run_cycle_for_selected_product() -> None:
@@ -217,6 +291,29 @@ def test_main_presenter_can_run_cycle_for_selected_product() -> None:
     assert "row=20.0" in state.ocr_diagnostics[0]
 
 
+def test_main_presenter_inspect_preview_frame_updates_live_ocr_without_incrementing_counters() -> None:
+    container = build_container(runtime_settings=AppRuntimeSettings(demo_mode=True))
+    _seed_main_screen_state(container)
+    presenter = _build_main_presenter(container)
+    presenter.runtime_controls.inspection_enabled = True
+
+    state = presenter.inspect_preview_frame()
+
+    assert state.preview_frame is not None
+    assert state.last_cycle_status == "pass"
+    assert state.last_trigger_source == "live_preview"
+    assert state.last_quantity == 5
+    assert state.last_ok_count == 5
+    assert state.last_ng_count == 0
+    assert state.last_result_label == "OK"
+    assert state.inspection_total_count == 0
+    assert state.inspection_counter_value == 0
+    assert state.inspection_batch_value == 0
+    assert state.task_summaries
+    assert state.preview_annotations
+    assert "live OCR=pass" in state.message
+
+
 def test_main_presenter_run_cycle_populates_artifact_summary_when_recording_is_enabled(tmp_path) -> None:
     container = build_container(
         runtime_settings=AppRuntimeSettings(
@@ -238,6 +335,25 @@ def test_main_presenter_run_cycle_populates_artifact_summary_when_recording_is_e
     assert state.latest_task_artifacts
     assert state.latest_task_artifacts[0].task_id == "ocr_label_1"
     assert state.latest_task_artifacts[0].debug_path
+
+
+def test_main_presenter_run_cycle_saves_core_artifacts_when_detailed_recording_is_disabled(tmp_path) -> None:
+    container = build_container(
+        runtime_settings=AppRuntimeSettings(
+            demo_mode=True,
+            artifact_root_dir=str(tmp_path),
+        )
+    )
+    _seed_main_screen_state(container)
+    presenter = _build_main_presenter(container)
+
+    state = presenter.run_cycle()
+
+    assert "artifacts saved" in state.message
+    assert state.artifact_summary.startswith("Artifacts saved | summary=")
+    assert state.last_artifact_dir
+    assert state.latest_summary_path
+    assert state.latest_task_artifacts == []
 
 
 def test_main_presenter_does_not_count_empty_ocr_text_in_runtime_metrics() -> None:

@@ -6,13 +6,14 @@ from typing import Sequence
 from drb_inspection.adapters.camera.models import ImageFrame
 from drb_inspection.adapters.db.models import InspectionHistoryRecord
 from drb_inspection.application.contracts.inspection import InspectionCycleResult
-from drb_inspection.application.contracts.runtime import RuntimeHardwareResult
+from drb_inspection.application.contracts.runtime import PreviewInspectionResult, RuntimeHardwareResult
 from drb_inspection.application.use_cases.connect_camera import ConnectCameraUseCase
 from drb_inspection.application.use_cases.connect_plc import ConnectPlcUseCase
 from drb_inspection.application.use_cases.configure_camera import ConfigureCurrentCameraUseCase
 from drb_inspection.application.use_cases.disconnect_camera import DisconnectCameraUseCase
 from drb_inspection.application.use_cases.disconnect_plc import DisconnectPlcUseCase
 from drb_inspection.application.use_cases.grab_preview import GrabPreviewUseCase
+from drb_inspection.application.use_cases.inspect_current_product_preview import InspectCurrentProductPreviewUseCase
 from drb_inspection.application.use_cases.import_product_catalog import ImportProductCatalogUseCase
 from drb_inspection.application.use_cases.load_main_screen_context import LoadMainScreenContextUseCase
 from drb_inspection.application.use_cases.load_runtime_status import LoadRuntimeStatusUseCase
@@ -64,6 +65,7 @@ class MainScreenPresenter:
     shutdown_runtime: ShutdownRuntimeUseCase
     configure_camera: ConfigureCurrentCameraUseCase
     grab_preview: GrabPreviewUseCase
+    inspect_current_product_preview: InspectCurrentProductPreviewUseCase
     import_product_catalog: ImportProductCatalogUseCase
     save_session_settings: SaveSessionSettingsUseCase
     move_session_roi: MoveSessionRoiUseCase
@@ -189,7 +191,7 @@ class MainScreenPresenter:
         return MainScreenState(
             **{
                 **state.__dict__,
-                "message": f"Result recording {status}.",
+                "message": f"Detailed recording {status}.",
             }
         )
 
@@ -290,6 +292,41 @@ class MainScreenPresenter:
             }
         )
 
+    def inspect_preview_frame(self) -> MainScreenState:
+        preview_result = self.inspect_current_product_preview.execute()
+        if preview_result.inspection is not None:
+            self._update_preview_metrics(preview_result)
+        state = self.load()
+        return MainScreenState(
+            **{
+                **state.__dict__,
+                "preview_frame": preview_result.image_frame,
+                "preview_summary": self._build_preview_summary(preview_result.image_frame),
+                "camera_connected": preview_result.camera_connected,
+                "last_cycle_status": (
+                    preview_result.inspection.overall_status.value
+                    if preview_result.inspection is not None
+                    else state.last_cycle_status
+                ),
+                "preview_annotations": (
+                    self._build_preview_annotations_from_inspection(preview_result.inspection)
+                    if preview_result.inspection is not None
+                    else state.preview_annotations
+                ),
+                "task_summaries": (
+                    self._build_task_summaries_from_inspection(preview_result.inspection)
+                    if preview_result.inspection is not None
+                    else state.task_summaries
+                ),
+                "ocr_diagnostics": (
+                    self._build_ocr_diagnostics_from_inspection(preview_result.inspection)
+                    if preview_result.inspection is not None
+                    else state.ocr_diagnostics
+                ),
+                "message": self._build_preview_inspection_message(preview_result),
+            }
+        )
+
     def run_cycle(self) -> MainScreenState:
         cycle_result = self.run_current_product_cycle.execute(
             record_results=self.runtime_controls.recording_enabled
@@ -353,8 +390,11 @@ class MainScreenPresenter:
         return f"Frame source: {frame!s} | capture {image_frame.capture_seconds * 1000:.1f} ms"
 
     def _build_task_summaries(self, cycle_result: InspectionCycleResult) -> list[str]:
+        return self._build_task_summaries_from_inspection(cycle_result.inspection)
+
+    def _build_task_summaries_from_inspection(self, inspection_result) -> list[str]:
         summaries: list[str] = []
-        for task_result in cycle_result.inspection.task_results:
+        for task_result in inspection_result.task_results:
             text = str(task_result.outputs.get("text", "")).strip()
             expected = str(task_result.outputs.get("expected_text", "")).strip()
             matched_variant = str(task_result.outputs.get("matched_variant", "")).strip()
@@ -388,8 +428,11 @@ class MainScreenPresenter:
         return summaries
 
     def _build_ocr_diagnostics(self, cycle_result: InspectionCycleResult) -> list[str]:
+        return self._build_ocr_diagnostics_from_inspection(cycle_result.inspection)
+
+    def _build_ocr_diagnostics_from_inspection(self, inspection_result) -> list[str]:
         diagnostics: list[str] = []
-        for task_result in cycle_result.inspection.task_results:
+        for task_result in inspection_result.task_results:
             if task_result.task_type.value != "ocr":
                 continue
             outputs = task_result.outputs
@@ -420,8 +463,11 @@ class MainScreenPresenter:
         return diagnostics
 
     def _build_preview_annotations(self, cycle_result: InspectionCycleResult) -> list[PreviewAnnotation]:
+        return self._build_preview_annotations_from_inspection(cycle_result.inspection)
+
+    def _build_preview_annotations_from_inspection(self, inspection_result) -> list[PreviewAnnotation]:
         annotations: list[PreviewAnnotation] = []
-        for task_result in cycle_result.inspection.task_results:
+        for task_result in inspection_result.task_results:
             if task_result.task_type.value == "ocr" and not self._task_counted_for_quantity(task_result):
                 continue
             roi_rect = task_result.outputs.get("roi_rect")
@@ -435,6 +481,15 @@ class MainScreenPresenter:
                 )
             )
         return annotations
+
+    def _build_preview_inspection_message(self, preview_result: PreviewInspectionResult) -> str:
+        base = preview_result.message or "Preview inspection updated."
+        if preview_result.inspection is None:
+            return base
+        return (
+            f"{base} | live OCR={preview_result.inspection.overall_status.value}"
+            f" | duration={preview_result.duration_ms:.1f} ms"
+        )
 
     def _build_cycle_message(self, cycle_result: InspectionCycleResult) -> str:
         base = (
@@ -512,6 +567,38 @@ class MainScreenPresenter:
                 "message": message,
             }
         )
+
+    def _update_preview_metrics(self, preview_result: PreviewInspectionResult) -> None:
+        inspection_result = preview_result.inspection
+        if inspection_result is None:
+            return
+        counted_results = [
+            task_result
+            for task_result in inspection_result.task_results
+            if self._task_counted_for_quantity(task_result)
+        ]
+        quantity = len(counted_results)
+        ok_count = sum(
+            1
+            for task_result in counted_results
+            if task_result.status.value == "pass"
+        )
+        ng_count = max(0, quantity - ok_count)
+        self.cycle_metrics.last_quantity = quantity
+        self.cycle_metrics.last_ok_count = ok_count
+        self.cycle_metrics.last_ng_count = ng_count
+        has_ocr_tasks = any(
+            task_result.task_type.value == "ocr"
+            for task_result in inspection_result.task_results
+        )
+        if has_ocr_tasks and quantity == 0:
+            self.cycle_metrics.last_result_label = "Checking"
+        else:
+            self.cycle_metrics.last_result_label = (
+                "OK" if inspection_result.overall_status.value == "pass" else "FAIL"
+            )
+        self.cycle_metrics.last_cycle_duration_ms = preview_result.duration_ms
+        self.cycle_metrics.last_trigger_source = "live_preview"
 
     def _build_roi_summary(self, session) -> str:
         roi_points = session.roi_points()

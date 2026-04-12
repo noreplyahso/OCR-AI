@@ -6,11 +6,11 @@ from datetime import datetime
 from drb_inspection.adapters.db.models import InspectionHistoryRecord
 from drb_inspection.adapters.db.base import RepositoryAdapter
 from drb_inspection.app.settings import AppRuntimeSettings
-from drb_inspection.application.contracts.inspection import InspectionCycleResult, InspectionTaskType
+from drb_inspection.application.contracts.inspection import InspectionCycleResult
+from drb_inspection.application.services.current_product_recipe_builder import CurrentProductRecipeBuilder
 from drb_inspection.application.services.inspection_artifact_recorder import InspectionArtifactRecorder
 from drb_inspection.application.use_cases.configure_camera import ConfigureCurrentCameraUseCase
 from drb_inspection.application.use_cases.perform_cycle import PerformInspectionCycleUseCase
-from drb_inspection.domain.inspection.models import InspectionRecipe, RecipeStep
 
 
 @dataclass
@@ -19,6 +19,7 @@ class RunCurrentProductCycleUseCase:
     configure_camera: ConfigureCurrentCameraUseCase
     perform_cycle: PerformInspectionCycleUseCase
     runtime_settings: AppRuntimeSettings
+    recipe_builder: CurrentProductRecipeBuilder
     artifact_recorder: InspectionArtifactRecorder | None = None
 
     def execute(
@@ -38,47 +39,24 @@ class RunCurrentProductCycleUseCase:
             raise ValueError("Invalid product.")
 
         self.configure_camera.execute()
-        steps = []
-        for index, roi_rect in enumerate(session.roi_rects(), start=1):
-            steps.append(
-                RecipeStep(
-                    step_id=f"ocr_label_{index}",
-                    plugin="ocr",
-                    task_type=InspectionTaskType.OCR,
-                    roi_name=f"label_roi_{index}",
-                    required=True,
-                    parameters={
-                        "expected_text": product.product_name,
-                        "model_path": product.model_path,
-                        "roi_rect": roi_rect,
-                        "rotate_clockwise": True,
-                        "row_threshold": 20,
-                        "acceptance_threshold": (
-                            product.threshold_accept if product.threshold_accept is not None else 0.8
-                        ),
-                        "duplication_threshold": (
-                            product.threshold_mns if product.threshold_mns is not None else 0.5
-                        ),
-                        **({"detected_text": product.product_name} if self.runtime_settings.demo_mode else {}),
-                    },
-                )
-            )
-        recipe = InspectionRecipe(
-            name=f"inspection-{product.product_name}",
-            version=1,
-            steps=steps,
-        )
+        recipe = self.recipe_builder.build(session=session, product=product)
         cycle = self.perform_cycle.execute(recipe=recipe)
         cycle.trigger_source = trigger_source
         cycle.signal_summary = signal_summary
-        should_record = self.runtime_settings.record_results_default if record_results is None else bool(record_results)
-        should_record = should_record and self._should_record_artifacts(cycle)
+        detailed_recording_enabled = (
+            self.runtime_settings.record_results_default if record_results is None else bool(record_results)
+        )
+        should_record = self._should_record_artifacts(cycle)
         if should_record and self.artifact_recorder is not None:
-            cycle.artifacts = self.artifact_recorder.record_cycle(
-                product_name=product.product_name,
-                session=session,
-                cycle_result=cycle,
-            )
+            try:
+                cycle.artifacts = self.artifact_recorder.record_cycle(
+                    product_name=product.product_name,
+                    session=session,
+                    cycle_result=cycle,
+                    include_task_artifacts=detailed_recording_enabled,
+                )
+            except Exception as exc:
+                self.repository.record_event(f"Inspection artifact save failed: {exc}")
         self.repository.save_inspection_history(
             self._build_history_entry(
                 user_name=session.user_name,

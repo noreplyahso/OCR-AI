@@ -99,42 +99,40 @@ class OcrPlugin:
             prediction_points = getattr(prediction, "box_points", None)
             prediction_text_raw = prediction.text
             if prediction.error == "exception: stack overflow":
-                return self._build_error_result(
+                return self._build_text_result(
                     request=request,
-                    message="Legacy OCR runtime failed with stack overflow.",
                     detected_text=self._normalize_text(prediction.text),
                     raw_detected_text=prediction.text,
                     expected_text=expected_text,
                     roi_rect=roi_rect,
                     roi_image=image,
                     raw_result=prediction.raw,
-                    error=prediction.error,
+                    error="",
                     detection_boxes=prediction_boxes,
                     detection_points=prediction_points,
                     acceptance_threshold=acceptance_threshold,
                     duplication_threshold=duplication_threshold,
                     row_threshold=row_threshold,
-                    warning="",
+                    warning=prediction.error,
                     reason="runtime_stack_overflow",
                     source="runtime",
                 )
             if prediction_error and not prediction.text:
-                return self._build_error_result(
+                return self._build_text_result(
                     request=request,
-                    message=f"Legacy OCR runtime failed: {prediction_error}",
                     detected_text="",
                     raw_detected_text=prediction.text,
                     expected_text=expected_text,
                     roi_rect=roi_rect,
                     roi_image=image,
                     raw_result=prediction_raw,
-                    error=prediction_error,
+                    error="",
                     detection_boxes=prediction_boxes,
                     detection_points=prediction_points,
                     acceptance_threshold=acceptance_threshold,
                     duplication_threshold=duplication_threshold,
                     row_threshold=row_threshold,
-                    warning="",
+                    warning=prediction_error,
                     reason="runtime_error",
                     source="runtime",
                 )

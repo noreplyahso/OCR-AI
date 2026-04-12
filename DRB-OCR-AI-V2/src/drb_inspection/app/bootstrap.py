@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import os
 import sys
 from pathlib import Path
@@ -39,7 +40,13 @@ _load_runtime_env_file()
 from drb_inspection.app.container import build_container
 from drb_inspection.app.settings import load_runtime_settings
 from drb_inspection.ui.shell import DesktopShell
-from drb_inspection.ui.qt import run_qt_app
+from drb_inspection.adapters.camera.models import CameraVendor
+
+
+def _preload_camera_sdk_for_qt(*, camera_vendor: CameraVendor) -> None:
+    if camera_vendor != CameraVendor.BASLER:
+        return
+    importlib.import_module("pypylon.pylon")
 
 
 def main() -> int:
@@ -49,6 +56,9 @@ def main() -> int:
         shell = DesktopShell(container=container)
         shell.show()
         return 0
+    _preload_camera_sdk_for_qt(camera_vendor=runtime_settings.camera_connection.vendor)
+    from drb_inspection.ui.qt import run_qt_app
+
     return run_qt_app(container)
 
 

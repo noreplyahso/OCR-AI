@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from drb_inspection.adapters.camera.models import ImageFrame
 from drb_inspection.adapters.plc.models import PlcReadState
-from drb_inspection.application.contracts.inspection import InspectionCycleResult
+from drb_inspection.application.contracts.inspection import InspectionCycleResult, InspectionRunResult
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,15 @@ class RuntimeStatus:
 class PreviewFrameResult:
     image_frame: ImageFrame | None
     camera_connected: bool
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class PreviewInspectionResult:
+    image_frame: ImageFrame | None
+    camera_connected: bool
+    inspection: InspectionRunResult | None = None
+    duration_ms: float = 0.0
     message: str = ""
 
 

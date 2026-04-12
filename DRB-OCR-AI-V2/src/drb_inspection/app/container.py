@@ -18,6 +18,7 @@ from drb_inspection.application.use_cases.disconnect_camera import DisconnectCam
 from drb_inspection.application.use_cases.disconnect_plc import DisconnectPlcUseCase
 from drb_inspection.application.use_cases.get_access_profile import GetAccessProfileUseCase
 from drb_inspection.application.use_cases.grab_preview import GrabPreviewUseCase
+from drb_inspection.application.use_cases.inspect_current_product_preview import InspectCurrentProductPreviewUseCase
 from drb_inspection.application.use_cases.import_product_catalog import ImportProductCatalogUseCase
 from drb_inspection.application.use_cases.load_main_screen_context import LoadMainScreenContextUseCase
 from drb_inspection.application.use_cases.load_runtime_status import LoadRuntimeStatusUseCase
@@ -34,6 +35,7 @@ from drb_inspection.application.use_cases.save_session_settings import SaveSessi
 from drb_inspection.application.use_cases.select_product import SelectProductUseCase
 from drb_inspection.application.use_cases.shutdown_runtime import ShutdownRuntimeUseCase
 from drb_inspection.application.services.inspection_artifact_recorder import InspectionArtifactRecorder
+from drb_inspection.application.services.current_product_recipe_builder import CurrentProductRecipeBuilder
 from drb_inspection.application.services.product_catalog_loader import ProductCatalogLoader
 from drb_inspection.application.use_cases.sync_products import SyncProductsUseCase
 from drb_inspection.domain.inspection.pipeline import InspectionPipeline
@@ -73,6 +75,7 @@ class AppContainer:
     shutdown_runtime: ShutdownRuntimeUseCase
     configure_camera: ConfigureCurrentCameraUseCase
     grab_preview: GrabPreviewUseCase
+    inspect_current_product_preview: InspectCurrentProductPreviewUseCase
     run_current_product_cycle: RunCurrentProductCycleUseCase
     poll_plc_signals: PollPlcSignalsUseCase
 
@@ -158,6 +161,14 @@ def build_container(runtime_settings: AppRuntimeSettings | None = None) -> AppCo
     shutdown_runtime = ShutdownRuntimeUseCase(camera=camera, plc=plc)
     configure_camera = ConfigureCurrentCameraUseCase(camera=camera, repository=repository)
     grab_preview = GrabPreviewUseCase(camera=camera)
+    recipe_builder = CurrentProductRecipeBuilder(demo_mode=settings.demo_mode)
+    inspect_current_product_preview = InspectCurrentProductPreviewUseCase(
+        repository=repository,
+        configure_camera=configure_camera,
+        grab_preview=grab_preview,
+        run_inspection=run_inspection,
+        recipe_builder=recipe_builder,
+    )
     artifact_recorder = (
         InspectionArtifactRecorder(base_dir=Path(settings.artifact_root_dir))
         if settings.artifact_root_dir
@@ -168,6 +179,7 @@ def build_container(runtime_settings: AppRuntimeSettings | None = None) -> AppCo
         configure_camera=configure_camera,
         perform_cycle=perform_cycle,
         runtime_settings=settings,
+        recipe_builder=recipe_builder,
         artifact_recorder=artifact_recorder,
     )
     poll_plc_signals = PollPlcSignalsUseCase(
@@ -201,6 +213,7 @@ def build_container(runtime_settings: AppRuntimeSettings | None = None) -> AppCo
         shutdown_runtime=shutdown_runtime,
         configure_camera=configure_camera,
         grab_preview=grab_preview,
+        inspect_current_product_preview=inspect_current_product_preview,
         run_current_product_cycle=run_current_product_cycle,
         poll_plc_signals=poll_plc_signals,
     )

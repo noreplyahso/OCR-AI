@@ -4,12 +4,7 @@ import time
 from dataclasses import dataclass
 
 from drb_inspection.adapters.plc.models import PlcConnectionSettings, PlcProtocolType, PlcReadState
-from drb_inspection.adapters.plc.protocols import (
-    PLCProtocol,
-    ModbusRTUProtocol,
-    ModbusTCPProtocol,
-    SLMPProtocol,
-)
+from drb_inspection.adapters.plc.legacy_protocols import PLCProtocol, build_legacy_protocol
 
 
 @dataclass
@@ -21,14 +16,14 @@ class PlcClient:
         self.disconnect()
         self.settings = settings
         protocol_type = settings.protocol_type
-        if protocol_type == PlcProtocolType.MODBUS_TCP:
-            self.protocol = ModbusTCPProtocol()
-        elif protocol_type == PlcProtocolType.MODBUS_RTU:
-            self.protocol = ModbusRTUProtocol()
-        elif protocol_type == PlcProtocolType.SLMP:
-            self.protocol = SLMPProtocol()
-        else:
+        if protocol_type not in {
+            PlcProtocolType.MODBUS_TCP,
+            PlcProtocolType.MODBUS_RTU,
+            PlcProtocolType.SLMP,
+        }:
             raise ValueError(f"Unsupported PLC protocol: {settings.protocol_type}")
+
+        self.protocol = build_legacy_protocol(protocol_type)
 
         attempts = max(settings.tries, 1)
         for _ in range(attempts):

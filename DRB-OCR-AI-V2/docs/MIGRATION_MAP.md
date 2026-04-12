@@ -78,3 +78,4 @@ Next:
 - migrate more of the production OCR flow from `lib/Display.py`
 - connect the new Qt screens to more of the real legacy UI behavior
 - migrate more of the product/session/config flows from `lib/Main_Screen.py`
+- execute UI parity plan in `docs/UI_PARITY_PLAN.md`

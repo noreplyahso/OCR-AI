@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from drb_inspection.adapters.camera.models import CameraVendor
 from drb_inspection.app.container import AppContainer
+from drb_inspection.app.settings import resolve_app_storage_root_dir
 from drb_inspection.ui.navigation import ScreenId
 from drb_inspection.ui.screens.login.presenter import LoginScreenPresenter
 from drb_inspection.ui.screens.login.state import LoginScreenState
@@ -36,6 +38,7 @@ class DesktopShell:
             shutdown_runtime=self.container.shutdown_runtime,
             configure_camera=self.container.configure_camera,
             grab_preview=self.container.grab_preview,
+            inspect_current_product_preview=self.container.inspect_current_product_preview,
             import_product_catalog=self.container.import_product_catalog,
             save_session_settings=self.container.save_session_settings,
             move_session_roi=self.container.move_session_roi,
@@ -64,8 +67,7 @@ class DesktopShell:
         if submit_result.next_screen == ScreenId.MAIN:
             self.active_screen = ScreenId.MAIN
             self.main_state = self.main_presenter.load()
-            if self.container.run_current_product_cycle.runtime_settings.auto_preview_on_start:
-                self.main_state = self.main_presenter.grab_preview_frame()
+            self._apply_auto_preview_after_login()
         else:
             self.active_screen = ScreenId.LOGIN
         return self.active_screen
@@ -84,6 +86,28 @@ class DesktopShell:
         self.active_screen = ScreenId.MAIN
         return self.main_state
 
+    def _apply_auto_preview_after_login(self) -> None:
+        runtime_settings = self.container.run_current_product_cycle.runtime_settings
+        if not runtime_settings.auto_preview_on_start or self.main_state is None:
+            return
+
+        should_auto_preview = (
+            runtime_settings.demo_mode
+            or runtime_settings.headless
+            or runtime_settings.camera_connection.vendor == CameraVendor.DEMO
+        )
+        if should_auto_preview:
+            self.main_state = self.main_presenter.grab_preview_frame()
+            return
+
+        self.main_state = replace(
+            self.main_state,
+            message=(
+                "Auto preview skipped for hardware camera on login. "
+                "Use Grab Preview or Start Live Preview."
+            ),
+        )
+
     def open_external_path(self, path: str) -> tuple[bool, str]:
         resolved = str(path or "").strip()
         if not resolved:
@@ -98,6 +122,22 @@ class DesktopShell:
         except Exception as exc:
             return False, f"Failed to open artifact path: {exc}"
         return True, f"Opened artifact path: {target}"
+
+    def resolve_artifact_browser_path(self) -> str:
+        if self.main_state is not None:
+            if self.main_state.last_artifact_dir:
+                return self.main_state.last_artifact_dir
+            if self.main_state.latest_summary_path:
+                summary_path = Path(self.main_state.latest_summary_path)
+                if summary_path.exists():
+                    return str(summary_path.parent)
+
+        runtime_artifact_root = (
+            self.container.run_current_product_cycle.runtime_settings.artifact_root_dir
+        )
+        if runtime_artifact_root:
+            return str(runtime_artifact_root)
+        return str(resolve_app_storage_root_dir() / "inspection-results")
 
     def show(self) -> None:
         screen = self.launch()

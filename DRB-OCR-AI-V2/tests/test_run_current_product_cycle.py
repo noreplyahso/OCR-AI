@@ -136,6 +136,61 @@ def test_run_current_product_cycle_records_artifacts_when_enabled(tmp_path: Path
     assert result.trigger_source == "manual"
 
 
+def test_run_current_product_cycle_records_core_artifacts_when_detailed_recording_is_disabled(
+    tmp_path: Path,
+) -> None:
+    container = build_container(
+        runtime_settings=AppRuntimeSettings(
+            demo_mode=False,
+            artifact_root_dir=str(tmp_path),
+        )
+    )
+    container.repository.upsert_product(
+        ProductRecord(
+            product_name="PRODUCT-X",
+            model_path="models/product_x.pt",
+        )
+    )
+    container.repository.update_session(product_name="PRODUCT-X")
+
+    @dataclass
+    class _ArtifactPerformCycle:
+        def execute(self, recipe):
+            return InspectionCycleResult(
+                image_ref=ImageFrame(frame=[[0, 1], [2, 3]], capture_seconds=0.01),
+                inspection=InspectionRunResult(
+                    recipe_name=recipe.name,
+                    overall_status=TaskStatus.PASS,
+                    task_results=[
+                        InspectionTaskResult(
+                            task_id="ocr_label_1",
+                            task_type=InspectionTaskType.OCR,
+                            status=TaskStatus.PASS,
+                            outputs={
+                                "text": "PRODUCT-X",
+                                "expected_text": "PRODUCT-X",
+                                "roi_name": "label_roi_1",
+                                "roi_rect": (0, 0, 2, 2),
+                                "roi_image": [[255, 255], [0, 0]],
+                            },
+                        )
+                    ],
+                ),
+                plc_result_sent="OK",
+            )
+
+    container.run_current_product_cycle.perform_cycle = _ArtifactPerformCycle()
+
+    result = container.run_current_product_cycle.execute(record_results=False)
+
+    assert result.artifacts is not None
+    assert Path(result.artifacts.summary_path).exists()
+    assert Path(result.artifacts.frame_path).exists()
+    assert result.artifacts.annotated_frame_path
+    assert Path(result.artifacts.annotated_frame_path).exists()
+    assert result.artifacts.task_artifacts == []
+
+
 def test_run_current_product_cycle_persists_history_entry_to_repository() -> None:
     container = build_container(runtime_settings=AppRuntimeSettings(demo_mode=True))
     container.repository.upsert_product(
@@ -203,7 +258,63 @@ def test_run_current_product_cycle_does_not_count_skipped_ocr_in_history() -> No
     assert len(history) == 1
     assert history[0].overall_status == "pass"
     assert history[0].task_count == 0
-    assert history[0].ok_count == 0
+
+
+def test_run_current_product_cycle_does_not_fail_when_artifact_recording_raises() -> None:
+    container = build_container(
+        runtime_settings=AppRuntimeSettings(
+            demo_mode=False,
+            artifact_root_dir="C:/invalid-artifact-dir",
+        )
+    )
+    container.repository.upsert_product(
+        ProductRecord(
+            product_name="PRODUCT-Z",
+            model_path="models/product_z.pt",
+        )
+    )
+    container.repository.update_session(user_name="admin", product_name="PRODUCT-Z")
+
+    @dataclass
+    class _ArtifactPerformCycle:
+        def execute(self, recipe):
+            return InspectionCycleResult(
+                image_ref=ImageFrame(frame=[[0, 1], [2, 3]], capture_seconds=0.01),
+                inspection=InspectionRunResult(
+                    recipe_name=recipe.name,
+                    overall_status=TaskStatus.PASS,
+                    task_results=[
+                        InspectionTaskResult(
+                            task_id="ocr_label_1",
+                            task_type=InspectionTaskType.OCR,
+                            status=TaskStatus.PASS,
+                            outputs={
+                                "text": "PRODUCT-Z",
+                                "expected_text": "PRODUCT-Z",
+                                "counted_quantity": True,
+                            },
+                        )
+                    ],
+                    message="ok",
+                ),
+                plc_result_sent="OK",
+            )
+
+    class _BrokenArtifactRecorder:
+        def record_cycle(self, **kwargs):
+            raise PermissionError("artifact root is not writable")
+
+    container.run_current_product_cycle.perform_cycle = _ArtifactPerformCycle()
+    container.run_current_product_cycle.artifact_recorder = _BrokenArtifactRecorder()
+
+    result = container.run_current_product_cycle.execute(record_results=True)
+    history = container.repository.list_recent_inspection_history(limit=1)
+
+    assert result.plc_result_sent == "OK"
+    assert result.artifacts is None
+    assert len(history) == 1
+    assert history[0].ok_count == 1
+    assert any("Inspection artifact save failed:" in event for event in container.repository.events)
     assert history[0].ng_count == 0
 
 

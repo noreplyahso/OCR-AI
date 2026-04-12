@@ -25,6 +25,7 @@ class InspectionArtifactRecorder:
         product_name: str,
         session: SessionRecord,
         cycle_result: InspectionCycleResult,
+        include_task_artifacts: bool = True,
     ) -> InspectionCycleArtifacts:
         timestamp = datetime.now()
         cycle_dir = self._build_cycle_dir(
@@ -47,6 +48,7 @@ class InspectionArtifactRecorder:
         task_artifacts = self._record_task_artifacts(
             task_results=cycle_result.inspection.task_results,
             cycle_dir=cycle_dir,
+            include_task_artifacts=include_task_artifacts,
         )
         summary_path = cycle_dir / "summary.json"
         summary_path.write_text(
@@ -89,7 +91,10 @@ class InspectionArtifactRecorder:
         *,
         task_results,
         cycle_dir: Path,
+        include_task_artifacts: bool,
     ) -> list[InspectionTaskArtifact]:
+        if not include_task_artifacts:
+            return []
         artifacts: list[InspectionTaskArtifact] = []
         for index, task_result in enumerate(task_results, start=1):
             task_slug = self._slug(task_result.task_id)

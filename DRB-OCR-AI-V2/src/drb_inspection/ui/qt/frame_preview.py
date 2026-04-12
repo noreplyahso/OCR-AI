@@ -101,26 +101,21 @@ def _annotation_color(status: str) -> QColor:
 
 def _build_placeholder_pixmap(summary: str, width: int, height: int) -> QPixmap:
     pixmap = QPixmap(width, height)
-    pixmap.fill(QColor("#f8fbff"))
+    pixmap.fill(QColor("#eef3f7"))
 
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing)
     painter.setBrush(QColor("#ffffff"))
-    painter.setPen(QPen(QColor("#d7e3f2"), 1))
-    painter.drawRoundedRect(8, 8, width - 16, height - 16, 16, 16)
+    painter.setPen(QPen(QColor("#c6d1db"), 2))
+    painter.drawRoundedRect(10, 10, width - 20, height - 20, 8, 8)
 
-    painter.setPen(QColor("#274064"))
-    title_font = QFont("Segoe UI", 14)
-    title_font.setBold(True)
-    painter.setFont(title_font)
-    painter.drawText(QRect(24, 24, width - 48, 40), Qt.AlignLeft | Qt.AlignVCenter, "Camera Preview")
-
-    painter.setPen(QColor("#61738f"))
-    body_font = QFont("Segoe UI", 10)
+    painter.setPen(QColor("#5f7694"))
+    body_font = QFont("Segoe UI", 11)
+    body_font.setBold(True)
     painter.setFont(body_font)
     painter.drawText(
-        QRect(24, 78, width - 48, height - 110),
-        Qt.AlignLeft | Qt.TextWordWrap,
+        QRect(28, 28, width - 56, height - 56),
+        Qt.AlignCenter | Qt.TextWordWrap,
         summary,
     )
     painter.end()

@@ -98,19 +98,27 @@ class PylonCameraAdapter(CameraAdapter):
             return
 
         self.camera.StopGrabbing()
-        self.camera.OffsetX.SetValue(0)
-        self.camera.OffsetY.SetValue(0)
-        self.camera.Width.SetValue(width)
-        self.camera.Height.SetValue(height)
-        self.camera.OffsetX.SetValue(offset_x)
-        self.camera.OffsetY.SetValue(offset_y)
-        self.camera.StartGrabbing(self._load_pylon().GrabStrategy_LatestImageOnly)
+        try:
+            self.camera.OffsetX.SetValue(self._coerce_integer_node_value(self.camera.OffsetX, 0))
+            self.camera.OffsetY.SetValue(self._coerce_integer_node_value(self.camera.OffsetY, 0))
+
+            width_value = self._coerce_integer_node_value(self.camera.Width, width)
+            height_value = self._coerce_integer_node_value(self.camera.Height, height)
+            self.camera.Width.SetValue(width_value)
+            self.camera.Height.SetValue(height_value)
+
+            offset_x_value = self._coerce_integer_node_value(self.camera.OffsetX, offset_x)
+            offset_y_value = self._coerce_integer_node_value(self.camera.OffsetY, offset_y)
+            self.camera.OffsetX.SetValue(offset_x_value)
+            self.camera.OffsetY.SetValue(offset_y_value)
+        finally:
+            self.camera.StartGrabbing(self._load_pylon().GrabStrategy_LatestImageOnly)
         self.settings = CameraSettings(
             exposure_time=self.settings.exposure_time,
-            offset_x=offset_x,
-            offset_y=offset_y,
-            width=width,
-            height=height,
+            offset_x=int(self.camera.OffsetX.GetValue()),
+            offset_y=int(self.camera.OffsetY.GetValue()),
+            width=int(self.camera.Width.GetValue()),
+            height=int(self.camera.Height.GetValue()),
         )
 
     def grab(self) -> ImageFrame | None:
@@ -150,3 +158,24 @@ class PylonCameraAdapter(CameraAdapter):
         except Exception:
             return ""
         return "" if value is None else str(value)
+
+    def _coerce_integer_node_value(self, node, requested: int) -> int:
+        value = int(requested)
+        minimum = self._safe_node_bound(node, "GetMin", value)
+        maximum = self._safe_node_bound(node, "GetMax", value)
+        if minimum > maximum:
+            minimum, maximum = maximum, minimum
+        clamped = max(minimum, min(value, maximum))
+        increment = self._safe_node_bound(node, "GetInc", 1)
+        if increment <= 1:
+            return clamped
+        return minimum + ((clamped - minimum) // increment) * increment
+
+    def _safe_node_bound(self, node, method_name: str, default: int) -> int:
+        method = getattr(node, method_name, None)
+        if method is None:
+            return int(default)
+        try:
+            return int(method())
+        except Exception:
+            return int(default)

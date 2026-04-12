@@ -20,8 +20,8 @@ class DesktopStackedWindow(QStackedWidget):
         self.login_widget.navigate.connect(self.navigate)
         self.main_widget.navigate.connect(self.navigate)
         self.setWindowTitle("DRB OCR AI V2")
-        self.resize(1180, 760)
-        self.setMinimumSize(1080, 700)
+        self.resize(1280, 1024)
+        self.setMinimumSize(1280, 1024)
 
     def start(self) -> None:
         screen = self.shell.launch()

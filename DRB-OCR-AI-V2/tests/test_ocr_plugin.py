@@ -227,7 +227,7 @@ def test_ocr_plugin_marks_expected_text_empty_as_skipped() -> None:
     assert result.outputs["counted_quantity"] is False
 
 
-def test_ocr_plugin_returns_error_when_legacy_runtime_reports_generic_error_without_text() -> None:
+def test_ocr_plugin_skips_when_legacy_runtime_reports_generic_error_without_text_like_v1() -> None:
     gateway = _FakeLegacyGateway()
     gateway.predict = lambda *args, **kwargs: type(
         "_Prediction",
@@ -249,10 +249,12 @@ def test_ocr_plugin_returns_error_when_legacy_runtime_reports_generic_error_with
 
     result = plugin.run(request)
 
-    assert result.status == TaskStatus.ERROR
-    assert "gpu unavailable" in result.message
+    assert result.status == TaskStatus.SKIPPED
+    assert "empty" in result.message.lower()
     assert result.outputs["reason"] == "runtime_error"
-    assert result.outputs["error"] == "gpu unavailable"
+    assert result.outputs["warning"] == "gpu unavailable"
+    assert result.outputs["error"] == ""
+    assert result.outputs["counted_quantity"] is False
     assert result.outputs["source"] == "runtime"
 
 
@@ -291,7 +293,7 @@ def test_ocr_plugin_keeps_text_result_and_surfaces_warning_when_runtime_returns_
     assert result.outputs["source"] == "runtime"
 
 
-def test_ocr_plugin_returns_error_when_legacy_runtime_reports_stack_overflow() -> None:
+def test_ocr_plugin_skips_when_legacy_runtime_reports_stack_overflow_like_v1() -> None:
     gateway = _FakeLegacyGateway()
     gateway.predict = lambda *args, **kwargs: type(
         "_Prediction",
@@ -313,9 +315,12 @@ def test_ocr_plugin_returns_error_when_legacy_runtime_reports_stack_overflow() -
 
     result = plugin.run(request)
 
-    assert result.status == TaskStatus.ERROR
-    assert result.outputs["error"] == "exception: stack overflow"
+    assert result.status == TaskStatus.SKIPPED
+    assert "empty" in result.message.lower()
+    assert result.outputs["warning"] == "exception: stack overflow"
+    assert result.outputs["error"] == ""
     assert result.outputs["reason"] == "runtime_stack_overflow"
+    assert result.outputs["counted_quantity"] is False
     assert result.outputs["source"] == "runtime"
 
 
